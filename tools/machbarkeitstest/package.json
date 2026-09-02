@@ -1,0 +1,14 @@
+{
+  "name": "horniscrap-machbarkeitstest",
+  "private": true,
+  "type": "module",
+  "description": "Misst, ob Option E (eigenes Browser-Scraping) für HORNBACH trägt.",
+  "scripts": {
+    "postinstall": "playwright install chromium",
+    "test:headful": "node check.mjs",
+    "test:headless": "node check.mjs --headless"
+  },
+  "dependencies": {
+    "playwright": "^1.56.1"
+  }
+}
