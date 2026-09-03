@@ -1,0 +1,92 @@
+{
+  "quelle": "produktseite-headful.html, ausgewertet 2026-09-03",
+  "artikel_url": "https://www.hornbach.de/p/hager-ads916d-16a-fehlerstrom-leitungsschutzschalter-fi-b-30ma/6072187/",
+  "jsonld_offers": [
+    {
+      "@type": "Offer",
+      "itemCondition": "https://schema.org/NewCondition",
+      "priceCurrency": "EUR",
+      "price": "46.51",
+      "url": "https://www.hornbach.de/p/hager-ads916d-16a-fehlerstrom-leitungsschutzschalter-fi-b-30ma/6072187/",
+      "availability": "https://schema.org/InStock",
+      "availableDeliveryMethod": "https://schema.org/ParcelService",
+      "potentialAction": {
+        "@type": "OrderAction"
+      }
+    },
+    {
+      "@type": "Offer",
+      "itemCondition": "https://schema.org/NewCondition",
+      "priceCurrency": "EUR",
+      "price": "46.51",
+      "url": "https://www.hornbach.de/p/hager-ads916d-16a-fehlerstrom-leitungsschutzschalter-fi-b-30ma/6072187/",
+      "availability": "https://schema.org/InStock",
+      "availableDeliveryMethod": "https://schema.org/OnSitePickup",
+      "potentialAction": {
+        "@type": "BuyAction"
+      },
+      "availableAtOrFrom": {
+        "@type": "Place",
+        "name": "HORNBACH Berlin-Neukölln",
+        "branchCode": "616"
+      },
+      "deliveryLeadTime": {
+        "@type": "QuantitativeValue",
+        "value": 0
+      }
+    }
+  ],
+  "apollo_state_pfad": "/Product:product:6072187:6072187_ST/offerRA",
+  "apollo_state_offerRA_auszug": {
+    "__typename": "OfferV2",
+    "merchant": {
+      "__typename": "Merchant",
+      "isMarketplaceMerchant": false,
+      "name": "HORNBACH",
+      "category": "RA",
+      "merchantId": "DE616",
+      "policiesHintText": "Informationen des Verkäufers, wie z. B. Rückgabebedingungen und AGB, finden Sie bei Klick auf den Verkäufernamen.",
+      "merchantProductsSearchUrl": null
+    },
+    "isLeading": false,
+    "offerId": "DE616_6072187_ST",
+    "canBeAddedToCart": true,
+    "canBeAddedToCartText": "Im Markt Reservieren",
+    "supplementaryText": "kostenloser Service",
+    "supplementaryTextState": "SUCCESS",
+    "locationText": "Elektro, Gang 10",
+    "articleLocation": {
+      "__typename": "ArticleLocation",
+      "areaAisle": "Elektro, Gang 10",
+      "rackSection": null
+    },
+    "availabilityText": "10 ST im Markt vorrätig",
+    "deliveryTimeText": "in 2 Stunden abholbereit",
+    "phoneOrder": null,
+    "disableNearbyMarketButton": false,
+    "marketDelivery": {
+      "__typename": "MarketDelivery",
+      "inclusiveDeliveryCost": {
+        "__typename": "Price",
+        "price": 49,
+        "currency": "€"
+      },
+      "variableDeliveryCost": {
+        "__typename": "Price",
+        "price": 1.5,
+        "currency": "€"
+      },
+      "inclusiveDeliveryDistance": {
+        "__typename": "NumberWithUnit",
+        "value": 15,
+        "unit": "km"
+      },
+      "maximumDeliveryDistance": {
+        "__typename": "NumberWithUnit",
+        "value": 80,
+        "unit": "km"
+      }
+    },
+    "productContactInformation": null
+  }
+}

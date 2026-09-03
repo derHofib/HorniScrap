@@ -87,7 +87,20 @@ Der Netzwerkmitschnitt zeigt genau dorthin einen Aufruf:
 
 **F4 ist der praktisch entscheidende Befund für Phase 4.** Der Bot-Schutz unterscheidet zwischen sichtbarem und `headless`-Chromium und blockt Letzteres. Ein unbeaufsichtigter Serverjob in der getesteten Form ist damit **nicht** möglich — nicht am Preis scheitert Phase 4, sondern am Betrieb. Ein legitimer, nicht als Umgehung zu wertender nächster Test: echtes, sichtbares Chromium unter einem virtuellen Display (`Xvfb`) auf einem Server, wie es in CI-Pipelines Standard ist — das verändert am Browser nichts, nur den Zielort des Fensters. Bislang nicht getestet.
 
-**Offene Unklarheit:** Der Seitentext enthält fünf EUR-Beträge (`46,51 €` ×2, `42,32 €` ×2, `5,70 €`, `49,00 €`). JSON-LD nennt eindeutig `46.51`, vermutlich der Verkaufspreis; was `42,32` (netto? Staffelpreis? Gewerbekundenkonditionen?) und `49,00` (durchgestrichener UVP?) bedeuten, ist aus der gesicherten `produktseite-headful.html` zu klären, bevor JSON-LD als alleinige Preisquelle gilt. Die Verfügbarkeitsangabe kam als Fließtext (`„in 2 Stunden abholbereit"`), nicht als separates strukturiertes Feld — für Phase 4 ist damit noch offen, ob Filialbestände strukturiert oder nur als Text vorliegen.
+**Preis-Mehrdeutigkeit geklärt** (Rohdatei ausgewertet, 2026-09-03): `46,51 €` ist der Stückpreis. `42,32 €` ist ein Staffelpreis — „Preis — 42,32 € * … Abnahme von 6 ST", also der Preis ab 6 Stück Mengenrabatt. `49,00 €` ist **kein Produktpreis**, sondern der Liefer-Mindestbestellwert des Markts („Vom Markt liefern lassen (ab 49,00 €)"). `5,70 €` sind Versandkosten. Für das Domänenmodell (Abschnitt 5.2) heißt das: `PriceObservation` braucht ein Feld für die Staffelmenge, sonst wird der 6er-Preis fälschlich als Einzelpreis übernommen.
+
+**Bestand ist bereits strukturiert vorhanden — ohne den gesperrten Endpunkt.** Die Produktseite (`/p/…`) rendert serverseitig ein `<script>window.__ARTICLE_DETAIL_APOLLO_STATE__ = {…}</script>` — den Apollo-GraphQL-Cache, mit dem die Seite clientseitig weiterrendert. Darin, für den aktuell gewählten Markt (hier automatisch „HORNBACH Berlin-Neukölln", `storeId: "616"`):
+
+```json
+"availabilityText": "10 ST im Markt vorrätig",
+"deliveryTimeText": "in 2 Stunden abholbereit",
+"locationText": "Elektro, Gang 10",
+"defaultPrice": { "price": 46.51, "unit": "ST", "currency": "€" }
+```
+
+Das ist **kein Fließtext-Fund mehr, sondern ein reguläres JSON-Feld mit exakter Stückzahl**, dazu Regal-Standort und Abholzeit — und es steht im selben, von `robots.txt` erlaubten Dokument wie der Preis. Der zuvor als notwendig angenommene Aufruf von `/frontend/query` (verboten, Abschnitt 2b) ist für den **aktuell zugeordneten Markt** also gar nicht nötig; ein Parser, der `__ARTICLE_DETAIL_APOLLO_STATE__` aus der Seite zieht, bekommt Preis, Staffelpreis und Filialbestand in einem erlaubten Abruf.
+
+**Offen bleibt die Marktwahl.** Der Store `616` wurde nicht explizit angefordert — kein Cookie- oder Query-Parameter dafür war im Seitenaufruf sichtbar, vermutlich IP-basierte Standortzuordnung oder ein Default. Für den Artikelkorb-über-mehrere-Märkte-Fall aus Abschnitt 6 ist damit weiterhin ungeklärt: Lässt sich der Markt gezielt setzen (Cookie/Parameter), oder bekommt man ausschließlich „den nächstgelegenen laut IP"? Das entscheidet, ob sich mit diesem Weg der Marktradius aus Abschnitt 6 überhaupt abbilden lässt, oder ob echte Mehrfach-Markt-Abfragen doch über einen anderen — dann ggf. gesperrten — Kanal liefen.
 
 ---
 
@@ -328,7 +341,11 @@ Bei menschlichem Tempo (Abschnitt 3.3) ist die letzte Zeile schlicht nicht durch
 
 **Technisch — teilweise verifiziert durch den Machbarkeitstest (Abschnitt 2b):** Der Bestand wird per GraphQL-Aufruf `PriceAndDeliveryInfo` an `/frontend/query` nachgeladen, parallel ein Marktabruf an `svc.hornbach.de/cmscontent-service/store?storeId=616`. **Beide sind für dieses Vorhaben keine gangbare Datenquelle** — nicht weil sie technisch nicht erreichbar wären, sondern weil `/frontend/` in `robots.txt` namentlich ausgeschlossen ist (Abschnitt 2b). Ein direkter Aufruf dieses Endpunkts widerspricht dem erklärten Vorbehalt des Betreibers.
 
-Was bleibt: Bestände, die im gerenderten Seitentext der `/p/`-Produktseite selbst auftauchen (im Test: „in 2 Stunden abholbereit" für den zuvor per `storeId` gesetzten Markt) — als Fließtext, nicht als strukturiertes Feld. Offen und noch zu prüfen: Wie wird der Markt gesetzt (Cookie/Query-Parameter/`storeId`)? Lässt sich er ohne vollen Reload wechseln? Liefert der Fließtext für andere Artikel auch Stückzahlen oder nur eine Ja/Nein-Aussage? Diese Fragen bestimmen, ob Bestandsdaten über die erlaubte Route (`/p/`-Seite parsen) mit vertretbarem Aufwand zu bekommen sind — oder ob Phase 4 mangels erlaubtem Zugang entfällt.
+**Nachtrag (Rohdatei ausgewertet, 2026-09-03): besser als angenommen.** Was bleibt, ist kein Fließtext, sondern ein reguläres JSON-Feld: Die `/p/`-Produktseite rendert serverseitig `window.__ARTICLE_DETAIL_APOLLO_STATE__` mit `"availabilityText": "10 ST im Markt vorrätig"` — exakte Stückzahl, dazu Regal-Standort und Abholzeit, für den dem Aufruf zugeordneten Markt (`storeId`, hier automatisch „HORNBACH Berlin-Neukölln"/616). Details in Abschnitt 2b.
+
+Damit ist die Bestandsfrage nicht mehr „Fließtext parsen, unstrukturiert", sondern „ein JSON-Blob aus einem `<script>`-Tag extrahieren" — technisch deutlich robuster und im selben, von `robots.txt` erlaubten Abruf wie der Preis enthalten.
+
+**Was weiterhin offen ist und den Marktradius-Fall entscheidet:** Wie wird der Markt gezielt gesetzt? Im Test kam `storeId: "616"` ohne erkennbaren Cookie- oder Query-Parameter zustande — vermutlich IP-/Standort-basiert. Für einen einzelnen, festen Markt (z. B. der Stammmarkt) ist das kein Problem. Für „Bestand in 5 definierten Märkten vergleichen" (die Eingrenzung oben) ist noch zu klären, ob sich der Markt pro Abruf explizit wählen lässt — und falls nicht, ob mehrere physische Anfragen aus unterschiedlicher Herkunft nötig wären, was den Aufwand wieder in Richtung der ursprünglichen Kombinatorik-Tabelle verschiebt.
 
 ---
 
