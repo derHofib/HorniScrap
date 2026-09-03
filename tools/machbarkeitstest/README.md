@@ -60,3 +60,39 @@ Alles landet in `befunde/`:
 
 Schick mir `befund-*.json` und `extraktion.json`, dann geht es mit belastbaren
 Zahlen weiter.
+
+---
+
+## Markt-Wahl-Test (`market-check.mjs`)
+
+Ergebnis des ersten Tests: Preis und Bestand liegen bereits strukturiert in der
+Produktseite selbst (`window.__ARTICLE_DETAIL_APOLLO_STATE__`), zugeordnet zu
+einem automatisch gewählten Markt (im ersten Test: HORNBACH Berlin-Neukölln,
+ohne erkennbaren Cookie oder Parameter im Aufruf). Offen blieb: **Lässt sich
+der Markt gezielt setzen?** Das entscheidet, ob sich Abschnitt 6 der
+Ausarbeitung (Bestand in mehreren definierten Märkten vergleichen) technisch
+abbilden lässt.
+
+```bash
+node market-check.mjs "https://www.hornbach.de/p/<echte-produkt-url>/"
+```
+
+Ablauf:
+
+1. Skript lädt die Produktseite frisch, protokolliert den aktuellen Markt und
+   alle gesetzten Cookies ("vorher").
+2. **Du** wechselst im geöffneten Browserfenster von Hand auf einen anderen
+   Markt (die Standort-/Marktanzeige liegt meist im Kopfbereich der Seite),
+   dann Enter im Terminal.
+3. Skript lädt die Seite neu, protokolliert Markt und Cookies erneut
+   ("nachher") und bildet die Differenz.
+4. Hat sich genau ein Cookie geändert, testet das Skript automatisch: neuer,
+   komplett leerer Browser-Kontext, **nur** dieser Cookie gesetzt, Seite
+   direkt aufgerufen — ganz ohne Klick. Kommt derselbe Zielmarkt zustande,
+   ist die Marktwahl ein reiner Cookie-Mechanismus und programmatisch
+   steuerbar. Kommt er nicht zustande, hängt sie an mehr (IP, Server-Session)
+   und lässt sich nicht ohne Weiteres von außen erzwingen.
+
+Ergebnis liegt in `befunde/markt-test.json`. Das Terminal fasst am Ende in
+einer Zeile zusammen, ob der Wiederholungstest erfolgreich war — schick mir
+diese Datei, dann weiß ich, ob und wie Phase 4 den Marktradius abbilden kann.
