@@ -1,7 +1,7 @@
 # Ausarbeitung: Preis- und Verfügbarkeitsdaten von HORNBACH
 
 **Projekt:** HorniScrap
-**Stand:** 2026-09-02
+**Stand:** 2026-09-03 (Nachtrag Abschnitt 2b: Machbarkeitstest aus echtem Netz)
 **Status:** Konzept / Entscheidungsvorlage — noch keine Implementierung
 
 ---
@@ -43,6 +43,51 @@ Vor der Konzeption wurde geprüft, ob die HORNBACH-Websites automatisiert abrufb
 3. Der aktive Bot-Schutz verschiebt die Fragestellung: Es geht nicht mehr um „wie parse ich das HTML", sondern um **„aus welcher Quelle beziehe ich die Daten legitim"**. Deshalb steht Abschnitt 4 vor der Technik.
 
 > **Abgrenzung:** Diese Ausarbeitung beschreibt bewusst **keine** Techniken zur Umgehung des Bot-Schutzes (Fingerprint-Spoofing, CAPTCHA-Solver-Dienste, Rotation über Residential-Proxys). Das wäre technisch beschreibbar, ist aber rechtlich riskant (Abschnitt 3), betrieblich instabil (jede Gegenmaßnahme des Betreibers bricht die Pipeline) und gegenüber dem Seitenbetreiber unfair. Die empfohlenen Wege kommen ohne aus.
+
+---
+
+## 2b. Nachtrag: Machbarkeitstest aus echtem Netz (2026-09-03)
+
+Der in Abschnitt 2 offengelassene Punkt wurde nachgeholt: `tools/machbarkeitstest/check.mjs` gegen eine reale Produktseite ausgeführt, aus einem normalen Heim-/Büronetz (nicht der Cloud-Sandbox dieser Ausarbeitung). Artikel: `hager-ads916d-16a-fehlerstrom-leitungsschutzschalter-fi-b-30ma/6072187`.
+
+| Frage | Ergebnis |
+|---|---|
+| **F1** — Kommt ein echter (sichtbarer) Browser durch? | ✅ Ja, nach 15,75 s |
+| **F2** — `robots.txt` lesbar, sobald Session besteht? | ✅ Ja |
+| **F3** — Preis maschinenlesbar? | ✅ Ja, JSON-LD: `46.51` |
+| **F4** — Auch headless (unbeaufsichtigter Serverbetrieb)? | ❌ **Nein** — Titel bleibt „Client Challenge" |
+
+**Der wichtigste Einzelbefund steckt in `robots.txt`, nicht in F1.** Sie schließt `/p/`-Produktseiten **nicht** aus, verbietet aber namentlich `/frontend/`:
+
+```
+User-agent: *
+Disallow: /checkout
+Disallow: /customer/
+Disallow: /cart/
+Disallow: /wishlist/
+Disallow: /contact/
+Disallow: /comparison/
+Disallow: /hornbach/cms/
+Disallow: /ordertracking/
+Disallow: /customer-purchases/
+Disallow: /frontend/
+```
+
+Der Netzwerkmitschnitt zeigt genau dorthin einen Aufruf:
+
+```
+200 POST https://www.hornbach.de/frontend/query?operationName=PriceAndDeliveryInfo
+200 GET  https://svc.hornbach.de/cmscontent-service/store?...&storeId=616
+```
+
+`PriceAndDeliveryInfo` ist mutmaßlich auch die Quelle für Filialbestände (Abschnitt 6) — und der einzige beobachtete Pfad, den der Betreiber maschinenlesbar ausgeschlossen hat. Das ist der in Abschnitt 3.2 beschriebene TDM-Vorbehalt (§ 44b Abs. 3 UrhG) nicht mehr als Vermutung, sondern als konkreter Befund. Daraus folgen zwei technisch mögliche, rechtlich aber unterschiedlich zu bewertende Wege:
+
+- **Produktseite laden, Preis aus eingebettetem JSON-LD lesen** (Pfad `/p/…`) — von `robots.txt` **nicht** ausgeschlossen. Das ist der Weg, den der Test verwendet hat, und er liefert einen sauberen, strukturierten Preis.
+- **`/frontend/query` direkt ansprechen** — von `robots.txt` **explizit ausgeschlossen**. Sollte nicht gebaut werden, auch wenn er technisch einfacher wäre und vermutlich auch Bestandsdaten liefert.
+
+**F4 ist der praktisch entscheidende Befund für Phase 4.** Der Bot-Schutz unterscheidet zwischen sichtbarem und `headless`-Chromium und blockt Letzteres. Ein unbeaufsichtigter Serverjob in der getesteten Form ist damit **nicht** möglich — nicht am Preis scheitert Phase 4, sondern am Betrieb. Ein legitimer, nicht als Umgehung zu wertender nächster Test: echtes, sichtbares Chromium unter einem virtuellen Display (`Xvfb`) auf einem Server, wie es in CI-Pipelines Standard ist — das verändert am Browser nichts, nur den Zielort des Fensters. Bislang nicht getestet.
+
+**Offene Unklarheit:** Der Seitentext enthält fünf EUR-Beträge (`46,51 €` ×2, `42,32 €` ×2, `5,70 €`, `49,00 €`). JSON-LD nennt eindeutig `46.51`, vermutlich der Verkaufspreis; was `42,32` (netto? Staffelpreis? Gewerbekundenkonditionen?) und `49,00` (durchgestrichener UVP?) bedeuten, ist aus der gesicherten `produktseite-headful.html` zu klären, bevor JSON-LD als alleinige Preisquelle gilt. Die Verfügbarkeitsangabe kam als Fließtext (`„in 2 Stunden abholbereit"`), nicht als separates strukturiertes Feld — für Phase 4 ist damit noch offen, ob Filialbestände strukturiert oder nur als Text vorliegen.
 
 ---
 
@@ -281,7 +326,9 @@ Bei menschlichem Tempo (Abschnitt 3.3) ist die letzte Zeile schlicht nicht durch
 2. **Nur bewegliche Artikel häufig prüfen.** Ein Artikel, der seit 30 Tagen konstant verfügbar ist, braucht keine stündliche Prüfung. Adaptive Frequenz: bei Wechsel des Zustands Frequenz hoch, bei Stabilität herunter.
 3. **Preis und Bestand entkoppeln.** Preise kommen aus dem Feed (Option A, billig), Bestände nur für eine engere Teilmenge.
 
-**Technisch (unverifiziert, Option E):** Marktbezogene Anzeigen werden auf solchen Shops üblicherweise über eine Markt-ID in Cookie oder Query-Parameter gesteuert, der Bestand über einen separaten JSON-Aufruf nachgeladen. Vor einer Implementierung ist an einer echten Browser-Session zu prüfen: Wie wird der Markt gesetzt? Wird der Bestand als Zahl, als Ampel oder nur als „verfügbar/nicht verfügbar" geliefert? Lässt sich der Markt ohne vollen Seiten-Reload wechseln? Diese drei Antworten bestimmen den Aufwand für Option E um den Faktor 5.
+**Technisch — teilweise verifiziert durch den Machbarkeitstest (Abschnitt 2b):** Der Bestand wird per GraphQL-Aufruf `PriceAndDeliveryInfo` an `/frontend/query` nachgeladen, parallel ein Marktabruf an `svc.hornbach.de/cmscontent-service/store?storeId=616`. **Beide sind für dieses Vorhaben keine gangbare Datenquelle** — nicht weil sie technisch nicht erreichbar wären, sondern weil `/frontend/` in `robots.txt` namentlich ausgeschlossen ist (Abschnitt 2b). Ein direkter Aufruf dieses Endpunkts widerspricht dem erklärten Vorbehalt des Betreibers.
+
+Was bleibt: Bestände, die im gerenderten Seitentext der `/p/`-Produktseite selbst auftauchen (im Test: „in 2 Stunden abholbereit" für den zuvor per `storeId` gesetzten Markt) — als Fließtext, nicht als strukturiertes Feld. Offen und noch zu prüfen: Wie wird der Markt gesetzt (Cookie/Query-Parameter/`storeId`)? Lässt sich er ohne vollen Reload wechseln? Liefert der Fließtext für andere Artikel auch Stückzahlen oder nur eine Ja/Nein-Aussage? Diese Fragen bestimmen, ob Bestandsdaten über die erlaubte Route (`/p/`-Seite parsen) mit vertretbarem Aufwand zu bekommen sind — oder ob Phase 4 mangels erlaubtem Zugang entfällt.
 
 ---
 
