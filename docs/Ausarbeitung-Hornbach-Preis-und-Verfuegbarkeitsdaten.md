@@ -100,7 +100,41 @@ Der Netzwerkmitschnitt zeigt genau dorthin einen Aufruf:
 
 Das ist **kein Fließtext-Fund mehr, sondern ein reguläres JSON-Feld mit exakter Stückzahl**, dazu Regal-Standort und Abholzeit — und es steht im selben, von `robots.txt` erlaubten Dokument wie der Preis. Der zuvor als notwendig angenommene Aufruf von `/frontend/query` (verboten, Abschnitt 2b) ist für den **aktuell zugeordneten Markt** also gar nicht nötig; ein Parser, der `__ARTICLE_DETAIL_APOLLO_STATE__` aus der Seite zieht, bekommt Preis, Staffelpreis und Filialbestand in einem erlaubten Abruf.
 
-**Offen bleibt die Marktwahl.** Der Store `616` wurde nicht explizit angefordert — kein Cookie- oder Query-Parameter dafür war im Seitenaufruf sichtbar, vermutlich IP-basierte Standortzuordnung oder ein Default. Für den Artikelkorb-über-mehrere-Märkte-Fall aus Abschnitt 6 ist damit weiterhin ungeklärt: Lässt sich der Markt gezielt setzen (Cookie/Parameter), oder bekommt man ausschließlich „den nächstgelegenen laut IP"? Das entscheidet, ob sich mit diesem Weg der Marktradius aus Abschnitt 6 überhaupt abbilden lässt, oder ob echte Mehrfach-Markt-Abfragen doch über einen anderen — dann ggf. gesperrten — Kanal liefen.
+**Offen blieb die Marktwahl.** Der Store `616` wurde nicht explizit angefordert — kein Cookie- oder Query-Parameter dafür war im ersten Seitenaufruf sichtbar. Das wurde im Nachtrag 2c erfolgreich geklärt.
+
+---
+
+## 2c. Nachtrag: Marktwahl programmatisch per Cookie gelöst (2026-09-07)
+
+Die in Abschnitt 2b offengebliebene Frage zur Marktwahl wurde mit dem Testskript `test-cookie-store.mjs` aus einem realen Browserlauf verifiziert.
+
+**Ergebnis:**
+Die Filialauswahl bei HORNBACH wird **vollständig über zwei einfache First-Party-Cookies** gesteuert:
+
+1. `hbMarketCookie` = `"<storeId>"` (z. B. `"609"`)
+2. `hbMarketSession` = `"<storeId>"` (z. B. `"609"`)
+
+**Verifizierung:**
+Wird ein komplett isolierter, neuer Browser-Kontext geöffnet und werden vor dem Aufruf der Produktseite lediglich diese beiden Cookies für `www.hornbach.de` gesetzt, rendert der Shop serverseitig direkt den Apollo-Cache für den gewünschten Zielmarkt:
+
+```json
+{
+  "storeId": "609",
+  "name": "HORNBACH Berlin-Mariendorf",
+  "availabilityText": "12 ST im Markt vorrätig",
+  "deliveryTimeText": "Lieferzeit ca. 2 Werktage",
+  "locationText": "Elektro, Gang 20"
+}
+```
+
+*Vergleich zur Default-Filiale 616 (Berlin-Neukölln):*
+* In Markt 616 lag der Hager-Schalter in **Gang 10**.
+* In Markt 609 liegt er nachweislich in **Gang 20**.
+
+**Konsequenz für das Projekt:**
+* Abschnitt 6 (Marktradius / Filialvergleich) ist **vollständig technisch abbildbar**.
+* Es sind keine UI-Klicks, keine Geolocation-Manipulation und keine Server-Sessions erforderlich.
+* Ein einzelner Abruf mit übergebenen Cookies liefert für jede beliebige Filiale sofort den exakten Filialbestand, die Abholzeit und den Regalplatz vor Ort.
 
 ---
 
