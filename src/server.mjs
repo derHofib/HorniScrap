@@ -2,7 +2,8 @@ import http from 'node:http';
 import { URL } from 'node:url';
 import { fetchHornbachArticle } from './fetcher.mjs';
 import { searchHornbachArticles } from './search.mjs';
-import { compareStoreAvailability, HORNBACH_STORE_CLUSTERS, buildReservationUrl } from './multi-store.mjs';
+import { compareStoreAvailability } from './multi-store.mjs';
+import { HORNBACH_STORES, findNearestStores } from './stores.mjs';
 
 const PORT = process.env.PORT || 8050;
 
@@ -24,13 +25,13 @@ function setCache(key, data) {
   cache.set(key, { timestamp: Date.now(), data });
 }
 
-// Integrierte HTML-Oberfläche mit Suchleiste, Umkreisvergleich & 1-Klick-Reservierung
+// Integrierte HTML-Oberfläche mit Suchleiste, GPS-Ortung, Umkreisvergleich & 1-Klick-Reservierung
 const HTML_CONTENT = `<!DOCTYPE html>
 <html lang="de">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>HorniScrap — HORNBACH Suche, Umkreisvergleich & Gangplätze</title>
+  <title>HorniScrap — HORNBACH Suche, GPS-Standort & Gangplätze</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -103,13 +104,48 @@ const HTML_CONTENT = `<!DOCTYPE html>
     }
     .input-row {
       display: grid;
-      grid-template-columns: 1fr 240px auto;
+      grid-template-columns: 1fr 280px auto;
       gap: 0.75rem;
       align-items: center;
     }
-    @media (max-width: 768px) {
+    @media (max-width: 820px) {
       .input-row { grid-template-columns: 1fr; }
     }
+    .store-select-wrap {
+      display: flex;
+      gap: 0.4rem;
+    }
+    .gps-btn {
+      padding: 0.85rem;
+      background: #334155;
+      color: #38bdf8;
+      border: 1px solid var(--card-border);
+      border-radius: 8px;
+      cursor: pointer;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.3rem;
+      transition: background 0.15s, border-color 0.15s;
+      white-space: nowrap;
+    }
+    .gps-btn:hover {
+      background: #475569;
+      border-color: #38bdf8;
+    }
+    .gps-badge {
+      display: none;
+      margin-top: 0.5rem;
+      padding: 0.3rem 0.6rem;
+      background: rgba(56, 189, 248, 0.15);
+      border: 1px solid rgba(56, 189, 248, 0.3);
+      color: #38bdf8;
+      border-radius: 6px;
+      font-size: 0.8rem;
+      font-weight: 600;
+    }
+
     input, select {
       width: 100%;
       padding: 0.85rem 1rem;
@@ -457,9 +493,9 @@ const HTML_CONTENT = `<!DOCTYPE html>
 <body>
   <div class="container">
     <header>
-      <span class="badge">FieldVibe Power-Engine</span>
-      <h1>HORNBACH Material-Suche & Umkreisvergleich</h1>
-      <p class="subtitle">Echtzeit-Verfügbarkeiten, Umkreis-Vergleich, Gangplätze & 1-Klick-Reservierung</p>
+      <span class="badge">FieldVibe Smart-Locator</span>
+      <h1>HORNBACH Suche, GPS-Standort & Gangplätze</h1>
+      <p class="subtitle">Echtzeit-Verfügbarkeiten, automatische Filialerkennung per GPS & 1-Klick-Reservierung</p>
     </header>
 
     <div class="search-card">
@@ -469,15 +505,21 @@ const HTML_CONTENT = `<!DOCTYPE html>
             <input type="text" id="searchInput" placeholder="Suchbegriff (z. B. FI Schalter), SKU (6072187) oder EAN-Barcode..." required autofocus>
           </div>
           <div>
-            <select id="storeSelect">
-              <option value="609" selected>609 — Berlin-Mariendorf</option>
-              <option value="616">616 — Berlin-Neukölln</option>
-              <option value="608">608 — Velten</option>
-              <option value="617">617 — Berlin-Bohnsdorf</option>
-              <option value="611">611 — Potsdam-Marquardt</option>
-              <option value="710">710 — München-Fröttmaning</option>
-              <option value="510">510 — Frankfurt-Niedereschbach</option>
-            </select>
+            <div class="store-select-wrap">
+              <select id="storeSelect">
+                <option value="609" selected>609 — Berlin-Mariendorf</option>
+                <option value="616">616 — Berlin-Neukölln</option>
+                <option value="608">608 — Velten</option>
+                <option value="617">617 — Berlin-Bohnsdorf</option>
+                <option value="611">611 — Potsdam-Marquardt</option>
+                <option value="710">710 — München-Fröttmaning</option>
+                <option value="510">510 — Frankfurt-Niedereschbach</option>
+              </select>
+              <button type="button" class="gps-btn" id="gpsBtn" onclick="locateNearestStore()" title="Nächste Filiale per Smartphone-GPS ermitteln">
+                📍 GPS
+              </button>
+            </div>
+            <div class="gps-badge" id="gpsBadge"></div>
           </div>
           <div>
             <button type="submit" class="submit-btn" id="submitBtn">
@@ -537,13 +579,13 @@ const HTML_CONTENT = `<!DOCTYPE html>
       <!-- Umkreisvergleich Sektion -->
       <div class="multi-store-box">
         <div class="multi-store-header">
-          <div class="multi-store-title">📍 Filialen im Umkreis vergleichen (Berlin & Umland)</div>
+          <div class="multi-store-title">📍 Filialen im Umkreis vergleichen</div>
           <button class="multi-store-btn" id="runCompareBtn" onclick="runUmkreisVergleich()">
             ⚡ Umkreis prüfen
           </button>
         </div>
         <div id="compareLoading" style="display: none; font-size: 0.85rem; color: var(--text-muted); padding: 0.5rem 0;">
-          Frage Berliner Filialen parallel ab (~2-3s)...
+          Frage Filialen im Umkreis parallel ab (~2-3s)...
         </div>
         <div class="store-compare-list" id="compareList"></div>
       </div>
@@ -570,8 +612,65 @@ const HTML_CONTENT = `<!DOCTYPE html>
     const resultsHeader = document.getElementById('resultsHeader');
     const resultsCount = document.getElementById('resultsCount');
     const errorBox = document.getElementById('errorBox');
+    const gpsBtn = document.getElementById('gpsBtn');
+    const gpsBadge = document.getElementById('gpsBadge');
 
     let currentDetailArticle = null;
+    let userCoords = null;
+    let nearbyStoresList = [];
+
+    // GPS-Standort des Geräts ermitteln
+    function locateNearestStore() {
+      if (!navigator.geolocation) {
+        alert('Geolocation wird von diesem Browser/Gerät nicht unterstützt.');
+        return;
+      }
+
+      gpsBtn.disabled = true;
+      gpsBtn.textContent = 'Ortung...';
+
+      navigator.geolocation.getCurrentPosition(
+        async (position) => {
+          const lat = position.coords.latitude;
+          const lng = position.coords.longitude;
+          userCoords = { lat, lng };
+
+          try {
+            const res = await fetch(\`/api/stores/nearest?lat=\${lat}&lng=\${lng}&limit=8\`);
+            const data = await res.json();
+
+            if (data.nearest && data.nearest.length > 0) {
+              nearbyStoresList = data.nearest;
+
+              // Dropdown aktualisieren & mit Entfernungen befüllen
+              storeSelect.innerHTML = '';
+              data.nearest.forEach((st, idx) => {
+                const opt = document.createElement('option');
+                opt.value = st.id;
+                opt.textContent = \`\${st.id} — \${st.name} (\${st.distanceKm} km)\`;
+                if (idx === 0) opt.selected = true;
+                storeSelect.appendChild(opt);
+              });
+
+              const nearest = data.nearest[0];
+              gpsBadge.textContent = \`🎯 Nächster Markt: \${nearest.name} (\${nearest.distanceKm} km entfernt)\`;
+              gpsBadge.style.display = 'inline-block';
+            }
+          } catch (err) {
+            alert('Fehler bei der Filialsuche: ' + err.message);
+          } finally {
+            gpsBtn.disabled = false;
+            gpsBtn.textContent = '📍 GPS';
+          }
+        },
+        (err) => {
+          gpsBtn.disabled = false;
+          gpsBtn.textContent = '📍 GPS';
+          alert('Standortzugriff nicht möglich: ' + err.message);
+        },
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 }
+      );
+    }
 
     function triggerSearch(term) {
       searchInput.value = term;
@@ -711,7 +810,6 @@ const HTML_CONTENT = `<!DOCTYPE html>
         document.getElementById('detailPickup').textContent = a.store.pickupTimeText || '';
       }
 
-      // 1-Klick Reservierungs-Link
       const resLink = document.getElementById('resDirectLink');
       resLink.href = a.url || ('https://www.hornbach.de/p/' + a.sku + '/');
 
@@ -728,8 +826,14 @@ const HTML_CONTENT = `<!DOCTYPE html>
       compareBtn.disabled = true;
       compareList.innerHTML = '';
 
+      // Falls GPS aktiv war, nutze die echten nächstgelegenen Filialen!
+      let storesParam = 'berlin';
+      if (nearbyStoresList.length >= 2) {
+        storesParam = nearbyStoresList.slice(0, 4).map(s => s.id).join(',');
+      }
+
       try {
-        const res = await fetch(\`/api/article/multi-store?query=\${encodeURIComponent(currentDetailArticle.sku)}&stores=berlin\`);
+        const res = await fetch(\`/api/article/multi-store?query=\${encodeURIComponent(currentDetailArticle.sku)}&stores=\${encodeURIComponent(storesParam)}\`);
         const data = await res.json();
         if (data.error) throw new Error(data.error);
 
@@ -789,7 +893,47 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // 2. Multi-Store Umkreisvergleich: GET /api/article/multi-store?query=...&stores=berlin
+  // 2. GPS-Nächste Filialen: GET /api/stores/nearest?lat=52.52&lng=13.41&limit=5
+  if (reqUrl.pathname === '/api/stores/nearest') {
+    const latStr = reqUrl.searchParams.get('lat');
+    const lngStr = reqUrl.searchParams.get('lng');
+    const limit = parseInt(reqUrl.searchParams.get('limit') || '5', 10);
+
+    if (!latStr || !lngStr) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Parameter lat und lng erforderlich' }));
+      return;
+    }
+
+    const lat = parseFloat(latStr);
+    const lng = parseFloat(lngStr);
+
+    if (isNaN(lat) || isNaN(lng)) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Ungültige Koordinaten' }));
+      return;
+    }
+
+    const nearest = findNearestStores(lat, lng, limit);
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(
+      JSON.stringify({
+        deviceCoords: { lat, lng },
+        count: nearest.length,
+        nearest,
+      })
+    );
+    return;
+  }
+
+  // 3. Alle Filialen: GET /api/stores
+  if (reqUrl.pathname === '/api/stores') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ count: HORNBACH_STORES.length, stores: HORNBACH_STORES }));
+    return;
+  }
+
+  // 4. Multi-Store Umkreisvergleich: GET /api/article/multi-store?query=...&stores=berlin
   if (reqUrl.pathname === '/api/article/multi-store') {
     const query = reqUrl.searchParams.get('query') || reqUrl.searchParams.get('sku');
     const stores = reqUrl.searchParams.get('stores') || 'berlin';
@@ -827,7 +971,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // 3. Volltextsuche: GET /api/search?q=<term>&storeId=<storeId>
+  // 5. Volltextsuche: GET /api/search?q=<term>&storeId=<storeId>
   if (reqUrl.pathname === '/api/search') {
     const q = reqUrl.searchParams.get('q') || reqUrl.searchParams.get('query');
     const storeId = reqUrl.searchParams.get('storeId') || null;
@@ -865,7 +1009,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // 4. Einzelartikel-Abfrage: GET /api/article?query=<skuOrUrl>&storeId=<storeId>
+  // 6. Einzelartikel-Abfrage: GET /api/article?query=<skuOrUrl>&storeId=<storeId>
   if (reqUrl.pathname === '/api/article') {
     const query = reqUrl.searchParams.get('query') || reqUrl.searchParams.get('sku');
     const storeId = reqUrl.searchParams.get('storeId') || null;
@@ -903,7 +1047,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // 5. Web-UI
+  // 7. Web-UI
   if (reqUrl.pathname === '/') {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     res.end(HTML_CONTENT);
@@ -916,8 +1060,9 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, () => {
   console.log(`
-🚀 HorniScrap Server läuft mit High-Speed Browser-Pool & Umkreissuche!
+🚀 HorniScrap Server läuft mit GPS-Ortung & Umkreissuche!
 👉 Oberfläche: http://localhost:${PORT}
+📍 GPS-Endpunkt: http://localhost:${PORT}/api/stores/nearest?lat=<LAT>&lng=<LNG>
 📡 API-Umkreissuche: http://localhost:${PORT}/api/article/multi-store?query=<SKU>&stores=berlin
 📡 API-Suche: http://localhost:${PORT}/api/search?q=<BEGRIFF>&storeId=<STORE>
 📡 API-Artikel: http://localhost:${PORT}/api/article?sku=<SKU>&storeId=<STORE>

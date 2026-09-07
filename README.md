@@ -147,7 +147,23 @@ GET /api/article?query=<SKU_ODER_URL>&storeId=<STORE_ID>
     "aisle": "Elektro, Gang 20"
   }
 }
+### 3. Multi-Store Umkreisvergleich
+```http
+GET /api/article/multi-store?query=<SKU_ODER_URL>&stores=<CLUSTER_ODER_IDS>
 ```
+**Beispiel**: `/api/article/multi-store?query=6072187&stores=berlin`
+
+Vergleicht parallel alle Filialen einer Region (oder kommagetrennte Markt-IDs) und liefert Bestände, Gangplätze und 1-Klick-Reservierungs-Links.
+
+---
+
+### 4. GPS-Filialsuche & Entfernungsberechnung
+```http
+GET /api/stores/nearest?lat=<LAT>&lng=<LNG>&limit=5
+```
+**Beispiel**: `/api/stores/nearest?lat=52.52&lng=13.41&limit=3`
+
+Ermittelt anhand der GPS-Koordinaten (z. B. Smartphone des Monteurs oder Baustellenadresse aus FieldVibe) die nächstgelegenen HORNBACH-Märkte mit genauer km-Entfernung nach der Haversine-Formel.
 
 ---
 
