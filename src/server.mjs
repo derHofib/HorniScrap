@@ -2,6 +2,7 @@ import http from 'node:http';
 import { URL } from 'node:url';
 import { fetchHornbachArticle } from './fetcher.mjs';
 import { searchHornbachArticles } from './search.mjs';
+import { compareStoreAvailability, HORNBACH_STORE_CLUSTERS, buildReservationUrl } from './multi-store.mjs';
 
 const PORT = process.env.PORT || 8050;
 
@@ -23,13 +24,13 @@ function setCache(key, data) {
   cache.set(key, { timestamp: Date.now(), data });
 }
 
-// Integrierte HTML-Oberfläche mit Suchleiste & Treffer-Raster
+// Integrierte HTML-Oberfläche mit Suchleiste, Umkreisvergleich & 1-Klick-Reservierung
 const HTML_CONTENT = `<!DOCTYPE html>
 <html lang="de">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>HorniScrap — HORNBACH Suche & Material-Checker</title>
+  <title>HorniScrap — HORNBACH Suche, Umkreisvergleich & Gangplätze</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -45,6 +46,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
       --success: #10b981;
       --danger: #ef4444;
       --warning: #f59e0b;
+      --primary: #3b82f6;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -59,7 +61,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
     }
     .container {
       width: 100%;
-      max-width: 1080px;
+      max-width: 1120px;
     }
     header {
       margin-bottom: 2rem;
@@ -107,9 +109,6 @@ const HTML_CONTENT = `<!DOCTYPE html>
     }
     @media (max-width: 768px) {
       .input-row { grid-template-columns: 1fr; }
-    }
-    .search-input-wrap {
-      position: relative;
     }
     input, select {
       width: 100%;
@@ -320,16 +319,14 @@ const HTML_CONTENT = `<!DOCTYPE html>
       gap: 0.4rem;
       transition: background 0.15s;
     }
-    .check-btn:hover {
-      background: var(--accent);
-    }
+    .check-btn:hover { background: var(--accent); }
 
-    /* Detail Modal / Overlay */
+    /* Detail Modal */
     .detail-overlay {
       display: none;
       position: fixed;
       inset: 0;
-      background: rgba(0,0,0,0.75);
+      background: rgba(0,0,0,0.8);
       backdrop-filter: blur(4px);
       z-index: 50;
       align-items: center;
@@ -341,10 +338,10 @@ const HTML_CONTENT = `<!DOCTYPE html>
       border: 1px solid var(--card-border);
       border-radius: 14px;
       width: 100%;
-      max-width: 680px;
-      max-height: 90vh;
+      max-width: 720px;
+      max-height: 92vh;
       overflow-y: auto;
-      box-shadow: 0 20px 40px rgba(0,0,0,0.6);
+      box-shadow: 0 20px 40px rgba(0,0,0,0.7);
       position: relative;
     }
     .close-modal {
@@ -369,14 +366,14 @@ const HTML_CONTENT = `<!DOCTYPE html>
       display: inline-flex;
       align-items: center;
       gap: 0.5rem;
-      padding: 0.5rem 1rem;
+      padding: 0.4rem 0.8rem;
       background: rgba(249, 115, 22, 0.15);
       border: 1px solid rgba(249, 115, 22, 0.4);
       color: var(--accent);
-      border-radius: 8px;
+      border-radius: 6px;
       font-weight: 800;
-      font-size: 1.1rem;
-      margin-top: 0.5rem;
+      font-size: 1rem;
+      margin-top: 0.3rem;
     }
     .error-box {
       display: none;
@@ -388,21 +385,88 @@ const HTML_CONTENT = `<!DOCTYPE html>
       margin-bottom: 1.5rem;
       font-size: 0.9rem;
     }
+
+    /* Multi-Store Vergleichs-Sektion */
+    .multi-store-box {
+      background: #0b1120;
+      border-top: 1px solid var(--card-border);
+      padding: 1.25rem 1.5rem;
+    }
+    .multi-store-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 0.75rem;
+    }
+    .multi-store-title {
+      font-size: 0.85rem;
+      font-weight: 700;
+      color: #cbd5e1;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .multi-store-btn {
+      padding: 0.4rem 0.8rem;
+      background: var(--primary);
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      font-size: 0.8rem;
+      font-weight: 700;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 0.3rem;
+    }
+    .multi-store-btn:hover { background: #2563eb; }
+    .store-compare-list {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+      margin-top: 0.75rem;
+    }
+    .store-compare-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 0.6rem 0.8rem;
+      background: #1e293b;
+      border: 1px solid var(--card-border);
+      border-radius: 6px;
+      font-size: 0.85rem;
+    }
+    .res-link {
+      color: var(--accent);
+      text-decoration: none;
+      font-weight: 700;
+      font-size: 0.8rem;
+      padding: 0.25rem 0.6rem;
+      border: 1px solid rgba(249, 115, 22, 0.4);
+      border-radius: 4px;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.2rem;
+      transition: background 0.15s, color 0.15s;
+    }
+    .res-link:hover {
+      background: var(--accent);
+      color: #fff;
+    }
   </style>
 </head>
 <body>
   <div class="container">
     <header>
-      <span class="badge">FieldVibe Integration</span>
-      <h1>HORNBACH Material-Suche</h1>
-      <p class="subtitle">Durchsuche das HORNBACH-Sortiment live nach Preisen, Filialbeständen & Regalplätzen</p>
+      <span class="badge">FieldVibe Power-Engine</span>
+      <h1>HORNBACH Material-Suche & Umkreisvergleich</h1>
+      <p class="subtitle">Echtzeit-Verfügbarkeiten, Umkreis-Vergleich, Gangplätze & 1-Klick-Reservierung</p>
     </header>
 
     <div class="search-card">
       <form id="searchForm">
         <div class="input-row">
-          <div class="search-input-wrap">
-            <input type="text" id="searchInput" placeholder="z. B. FI Schalter 16A, NYM-J 5x2.5, WAGO Klemmen..." required autofocus>
+          <div>
+            <input type="text" id="searchInput" placeholder="Suchbegriff (z. B. FI Schalter), SKU (6072187) oder EAN-Barcode..." required autofocus>
           </div>
           <div>
             <select id="storeSelect">
@@ -423,12 +487,12 @@ const HTML_CONTENT = `<!DOCTYPE html>
           </div>
         </div>
         <div class="examples">
-          <span>Häufige Handwerker-Suchen:</span>
+          <span>Direkt-Klicks:</span>
           <button type="button" class="chip" onclick="triggerSearch('FI Schalter 16A')">FI Schalter 16A</button>
           <button type="button" class="chip" onclick="triggerSearch('NYM-J 5x2.5')">NYM-J 5x2,5</button>
           <button type="button" class="chip" onclick="triggerSearch('WAGO Klemmen')">WAGO Klemmen</button>
-          <button type="button" class="chip" onclick="triggerSearch('Schuko Steckdose weiß')">Schuko Steckdosen</button>
           <button type="button" class="chip" onclick="triggerSearch('6072187')">Art.-Nr. 6072187</button>
+          <button type="button" class="chip" onclick="triggerSearch('3250611068143')">EAN 3250611068143</button>
         </div>
       </form>
     </div>
@@ -437,7 +501,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
 
     <div class="results-header" id="resultsHeader">
       <div class="results-count" id="resultsCount">0 Treffer gefunden</div>
-      <div style="font-size: 0.85rem; color: var(--text-muted);">Preise & Bestände für gewählten Markt</div>
+      <div style="font-size: 0.85rem; color: var(--text-muted);">⚡ Blitzschnell über Browser-Pool</div>
     </div>
 
     <div class="results-grid" id="resultsGrid"></div>
@@ -449,7 +513,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
       <button class="close-modal" onclick="closeDetail()">&times;</button>
       <div style="padding: 1.5rem; border-bottom: 1px solid var(--card-border); display: flex; gap: 1rem;">
         <img id="detailImg" src="" style="width: 100px; height: 100px; object-fit: contain; background: #fff; border-radius: 8px; padding: 0.3rem;">
-        <div>
+        <div style="flex: 1;">
           <div id="detailBrand" style="color: var(--accent); font-size: 0.8rem; font-weight: 700; text-transform: uppercase;">MARKE</div>
           <h2 id="detailTitle" style="font-size: 1.15rem; font-weight: 700; margin: 0.2rem 0 0.5rem 0;">Titel</h2>
           <div style="font-family: 'JetBrains Mono', monospace; font-size: 0.8rem; color: var(--text-muted);" id="detailSku">SKU: </div>
@@ -462,15 +526,33 @@ const HTML_CONTENT = `<!DOCTYPE html>
           <div id="detailTier" style="margin-top: 0.5rem;"></div>
         </div>
         <div>
-          <div style="font-size: 0.75rem; color: var(--text-muted); font-weight: 700; text-transform: uppercase;">Vor Ort im Markt</div>
+          <div style="font-size: 0.75rem; color: var(--text-muted); font-weight: 700; text-transform: uppercase;">Gewählte Filiale</div>
           <div style="font-size: 1rem; font-weight: 700; color: #fff; margin-top: 0.25rem;" id="detailStoreName">Markt</div>
           <div id="detailStock" style="font-weight: 700; margin-top: 0.25rem;">Bestand...</div>
           <div class="aisle-highlight" id="detailAisle">📍 Gang 20</div>
           <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.4rem;" id="detailPickup"></div>
         </div>
       </div>
-      <div style="padding: 1rem 1.5rem; background: #0f172a; border-top: 1px solid var(--card-border);">
-        <button style="width: 100%; padding: 0.75rem; background: var(--accent); color: #fff; border: none; border-radius: 6px; font-weight: 700; cursor: pointer;" onclick="alert('In FieldVibe als Materialbedarf übernommen!')">
+
+      <!-- Umkreisvergleich Sektion -->
+      <div class="multi-store-box">
+        <div class="multi-store-header">
+          <div class="multi-store-title">📍 Filialen im Umkreis vergleichen (Berlin & Umland)</div>
+          <button class="multi-store-btn" id="runCompareBtn" onclick="runUmkreisVergleich()">
+            ⚡ Umkreis prüfen
+          </button>
+        </div>
+        <div id="compareLoading" style="display: none; font-size: 0.85rem; color: var(--text-muted); padding: 0.5rem 0;">
+          Frage Berliner Filialen parallel ab (~2-3s)...
+        </div>
+        <div class="store-compare-list" id="compareList"></div>
+      </div>
+
+      <div style="padding: 1rem 1.5rem; background: #0f172a; border-top: 1px solid var(--card-border); display: flex; gap: 0.75rem;">
+        <a id="resDirectLink" href="#" target="_blank" class="submit-btn" style="flex: 1; text-decoration: none; font-size: 0.9rem; background: #334155;">
+          🛒 Direkt bei Hornbach reservieren ↗
+        </a>
+        <button style="flex: 1; padding: 0.75rem; background: var(--accent); color: #fff; border: none; border-radius: 6px; font-weight: 700; cursor: pointer;" onclick="alert('In FieldVibe als Materialbedarf übernommen!')">
           + In FieldVibe-Vorgang übernehmen
         </button>
       </div>
@@ -489,6 +571,8 @@ const HTML_CONTENT = `<!DOCTYPE html>
     const resultsCount = document.getElementById('resultsCount');
     const errorBox = document.getElementById('errorBox');
 
+    let currentDetailArticle = null;
+
     function triggerSearch(term) {
       searchInput.value = term;
       form.dispatchEvent(new Event('submit'));
@@ -502,7 +586,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
 
       submitBtn.disabled = true;
       spinner.style.display = 'inline-block';
-      btnText.textContent = 'Suche läuft...';
+      btnText.textContent = 'Suche...';
       errorBox.style.display = 'none';
       resultsGrid.innerHTML = '';
       resultsHeader.style.display = 'none';
@@ -514,7 +598,6 @@ const HTML_CONTENT = `<!DOCTYPE html>
         if (!res.ok || data.error) throw new Error(data.error || 'Fehler bei der Suche');
 
         if (data.isSingleProduct && data.results.length === 1) {
-          // Direkt Einzelprodukt anzeigen
           renderCards(data.results, true);
           openDetail(data.results[0]);
         } else {
@@ -555,8 +638,8 @@ const HTML_CONTENT = `<!DOCTYPE html>
               </div>
             </div>
             <div class="badges-row">
-              \${item.canOrderOnline ? '<span class="status-badge badge-online">🟢 Online bestellbar</span>' : ''}
-              \${item.canReserveInStore ? '<span class="status-badge badge-store">🏢 Im Markt vorrätig</span>' : ''}
+              \${item.canOrderOnline ? '<span class="status-badge badge-online">🟢 Online lieferbar</span>' : ''}
+              \${item.canReserveInStore ? '<span class="status-badge badge-store">🏢 Im Markt</span>' : ''}
             </div>
           </div>
           <div class="card-bottom">
@@ -565,7 +648,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
               <div class="card-unit">/ \${item.unit}</div>
             </div>
             <button class="check-btn" onclick='checkArticleDetail("\${item.sku}")'>
-              📍 Filialbestand & Gang prüfen
+              📍 Bestand & Gang prüfen
             </button>
           </div>
         \`;
@@ -576,14 +659,14 @@ const HTML_CONTENT = `<!DOCTYPE html>
     async function checkArticleDetail(sku) {
       const storeId = storeSelect.value;
       submitBtn.disabled = true;
-      btnText.textContent = 'Prüfe Markt...';
+      btnText.textContent = 'Prüfe...';
       try {
         const res = await fetch(\`/api/article?query=\${encodeURIComponent(sku)}&storeId=\${encodeURIComponent(storeId)}\`);
         const article = await res.json();
         if (article.error) throw new Error(article.error);
         openDetail(article);
       } catch (err) {
-        alert('Fehler beim Laden des Filialbestands: ' + err.message);
+        alert('Fehler beim Laden: ' + err.message);
       } finally {
         submitBtn.disabled = false;
         btnText.textContent = 'Suchen';
@@ -591,6 +674,10 @@ const HTML_CONTENT = `<!DOCTYPE html>
     }
 
     function openDetail(a) {
+      currentDetailArticle = a;
+      document.getElementById('compareList').innerHTML = '';
+      document.getElementById('compareLoading').style.display = 'none';
+
       document.getElementById('detailImg').src = a.imageUrl || 'https://via.placeholder.com/100';
       document.getElementById('detailBrand').textContent = a.brand || 'HORNBACH';
       document.getElementById('detailTitle').textContent = a.title;
@@ -624,7 +711,53 @@ const HTML_CONTENT = `<!DOCTYPE html>
         document.getElementById('detailPickup').textContent = a.store.pickupTimeText || '';
       }
 
+      // 1-Klick Reservierungs-Link
+      const resLink = document.getElementById('resDirectLink');
+      resLink.href = a.url || ('https://www.hornbach.de/p/' + a.sku + '/');
+
       document.getElementById('detailOverlay').style.display = 'flex';
+    }
+
+    async function runUmkreisVergleich() {
+      if (!currentDetailArticle) return;
+      const compareLoading = document.getElementById('compareLoading');
+      const compareList = document.getElementById('compareList');
+      const compareBtn = document.getElementById('runCompareBtn');
+
+      compareLoading.style.display = 'block';
+      compareBtn.disabled = true;
+      compareList.innerHTML = '';
+
+      try {
+        const res = await fetch(\`/api/article/multi-store?query=\${encodeURIComponent(currentDetailArticle.sku)}&stores=berlin\`);
+        const data = await res.json();
+        if (data.error) throw new Error(data.error);
+
+        data.stores.forEach(st => {
+          const row = document.createElement('div');
+          row.className = 'store-compare-row';
+          row.innerHTML = \`
+            <div>
+              <div style="font-weight: 700; color: #fff;">\${st.name || ('Markt ' + st.storeId)}</div>
+              <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.15rem;">
+                \${st.aisle ? '📍 ' + st.aisle : 'Regal n.v.'} • \${st.pickupTimeText || 'Lieferzeit n.v.'}
+              </div>
+            </div>
+            <div style="display: flex; align-items: center; gap: 0.75rem;">
+              <span style="font-weight: 700; color: \${st.inStock ? 'var(--success)' : 'var(--danger)'};">
+                \${st.inStock ? '🟢 ' + st.stockCount + ' Stk.' : '🔴 Ausverkauft'}
+              </span>
+              \${st.reservationUrl ? \`<a href="\${st.reservationUrl}" target="_blank" class="res-link">Reservieren ↗</a>\` : ''}
+            </div>
+          \`;
+          compareList.appendChild(row);
+        });
+      } catch (err) {
+        compareList.innerHTML = \`<div style="color: var(--danger); font-size: 0.85rem;">Fehler: \${err.message}</div>\`;
+      } finally {
+        compareLoading.style.display = 'none';
+        compareBtn.disabled = false;
+      }
     }
 
     function closeDetail() {
@@ -656,7 +789,45 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // 2. Volltextsuche: GET /api/search?q=<term>&storeId=<storeId>
+  // 2. Multi-Store Umkreisvergleich: GET /api/article/multi-store?query=...&stores=berlin
+  if (reqUrl.pathname === '/api/article/multi-store') {
+    const query = reqUrl.searchParams.get('query') || reqUrl.searchParams.get('sku');
+    const stores = reqUrl.searchParams.get('stores') || 'berlin';
+
+    if (!query) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Parameter query oder sku erforderlich' }));
+      return;
+    }
+
+    const cacheKey = `multistore:${query.trim()}:${stores}`;
+    const cached = getCached(cacheKey);
+    if (cached) {
+      res.writeHead(200, { 'Content-Type': 'application/json', 'X-Cache': 'HIT' });
+      res.end(JSON.stringify(cached));
+      return;
+    }
+
+    try {
+      console.log(`[API MultiStore] Vergleiche Filialen (${stores}) für "${query}"...`);
+      const result = await compareStoreAvailability({
+        urlOrSku: query,
+        stores,
+      });
+
+      setCache(cacheKey, result);
+
+      res.writeHead(200, { 'Content-Type': 'application/json', 'X-Cache': 'MISS' });
+      res.end(JSON.stringify(result));
+    } catch (err) {
+      console.error(`[API MultiStore] Fehler bei "${query}":`, err.message);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message }));
+    }
+    return;
+  }
+
+  // 3. Volltextsuche: GET /api/search?q=<term>&storeId=<storeId>
   if (reqUrl.pathname === '/api/search') {
     const q = reqUrl.searchParams.get('q') || reqUrl.searchParams.get('query');
     const storeId = reqUrl.searchParams.get('storeId') || null;
@@ -694,7 +865,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // 3. Einzelartikel-Abfrage: GET /api/article?query=<skuOrUrl>&storeId=<storeId>
+  // 4. Einzelartikel-Abfrage: GET /api/article?query=<skuOrUrl>&storeId=<storeId>
   if (reqUrl.pathname === '/api/article') {
     const query = reqUrl.searchParams.get('query') || reqUrl.searchParams.get('sku');
     const storeId = reqUrl.searchParams.get('storeId') || null;
@@ -732,7 +903,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // 4. Web-UI
+  // 5. Web-UI
   if (reqUrl.pathname === '/') {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     res.end(HTML_CONTENT);
@@ -745,8 +916,9 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, () => {
   console.log(`
-🚀 HorniScrap Server läuft mit Suchfunktion!
-👉 Such-Oberfläche im Browser: http://localhost:${PORT}
+🚀 HorniScrap Server läuft mit High-Speed Browser-Pool & Umkreissuche!
+👉 Oberfläche: http://localhost:${PORT}
+📡 API-Umkreissuche: http://localhost:${PORT}/api/article/multi-store?query=<SKU>&stores=berlin
 📡 API-Suche: http://localhost:${PORT}/api/search?q=<BEGRIFF>&storeId=<STORE>
 📡 API-Artikel: http://localhost:${PORT}/api/article?sku=<SKU>&storeId=<STORE>
 `);

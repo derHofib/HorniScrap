@@ -1,8 +1,8 @@
-import { chromium } from 'playwright';
 import { parseHornbachApolloState } from './parser.mjs';
+import { getBrowser, createOptimizedPage, waitForWindowProperty } from './browser-pool.mjs';
 
 /**
- * Normalisiert eine SKU oder URL auf eine aufrufbare HORNBACH-URL.
+ * Normalisiert eine SKU, EAN oder URL auf eine aufrufbare HORNBACH-URL.
  *
  * @param {string} urlOrSku
  * @returns {string}
@@ -12,89 +12,48 @@ export function buildHornbachUrl(urlOrSku) {
   if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
     return trimmed;
   }
-  // Nur Ziffern / SKU
-  const cleanSku = trimmed.replace(/[^\d]/g, '');
-  if (!cleanSku) {
-    throw new Error(`Ungültige URL oder SKU: "${urlOrSku}"`);
+  // Reine Ziffern (SKU oder EAN-13)
+  const cleanNum = trimmed.replace(/[^\d]/g, '');
+  if (!cleanNum) {
+    throw new Error(`Ungültige URL, SKU oder EAN: "${urlOrSku}"`);
   }
-  return `https://www.hornbach.de/s/${cleanSku}`;
+  return `https://www.hornbach.de/s/${cleanNum}`;
 }
 
 /**
- * Ruft eine HORNBACH-Produktseite über Playwright ab und extrahiert die Artikel- und Bestandsdaten.
+ * Ruft eine HORNBACH-Produktseite über den Browser-Pool ab.
+ * Dank Browser-Wiederverwendung und Tracking-Blockierung in ~1.5 bis 3 Sekunden.
  *
  * @param {Object} params
- * @param {string} params.urlOrSku - Hornbach-URL oder reine Artikelnummer (z. B. "6072187")
- * @param {string} [params.storeId] - Optionale Filial-ID (z. B. "609" für Berlin-Mariendorf, "616" für Berlin-Neukölln)
- * @param {boolean} [params.headless=false] - Headless-Modus (true wird oft von Bot-Defense geblockt)
- * @param {number} [params.timeoutMs=60000] - Timeout für den Seitenabruf
- * @param {number} [params.waitAfterLoadMs=12000] - Wartezeit nach DOMContentLoaded für Challenge-Lösung & Apollo-Hydration
- * @param {import('playwright').Browser} [params.existingBrowser] - Optionaler bereits geöffneter Browser zur Wiederverwendung
+ * @param {string} params.urlOrSku - Hornbach-URL, Artikelnummer oder EAN
+ * @param {string} [params.storeId] - Optionale Filial-ID
+ * @param {boolean} [params.headless=false]
+ * @param {number} [params.timeoutMs=30000]
  * @returns {Promise<import('./parser.mjs').HornbachArticle>}
  */
-export function fetchHornbachArticle(params) {
-  return _fetchHornbachArticleInternal(params);
-}
-
-async function _fetchHornbachArticleInternal({
+export async function fetchHornbachArticle({
   urlOrSku,
   storeId = null,
   headless = false,
-  timeoutMs = 60000,
-  waitAfterLoadMs = 12000,
-  existingBrowser = null,
+  timeoutMs = 30000,
 }) {
   const targetUrl = buildHornbachUrl(urlOrSku);
-  const ownBrowser = !existingBrowser;
-  const browser = existingBrowser || (await chromium.launch({ headless }));
+  const browser = await getBrowser(headless);
+  const { ctx, page } = await createOptimizedPage(browser, storeId);
 
   try {
-    const ctx = await browser.newContext({
-      locale: 'de-DE',
-      timezoneId: 'Europe/Berlin',
-      viewport: { width: 1440, height: 900 },
-    });
-
-    // Filial-Cookies setzen, falls storeId vorgegeben
-    if (storeId) {
-      const cleanStoreId = String(storeId).trim();
-      await ctx.addCookies([
-        {
-          name: 'hbMarketCookie',
-          value: cleanStoreId,
-          domain: 'www.hornbach.de',
-          path: '/',
-        },
-        {
-          name: 'hbMarketSession',
-          value: cleanStoreId,
-          domain: 'www.hornbach.de',
-          path: '/',
-        },
-        {
-          name: 'hbMarketConfirmed',
-          value: 'true',
-          domain: 'www.hornbach.de',
-          path: '/',
-        },
-      ]);
+    try {
+      await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: timeoutMs });
+    } catch (err) {
+      if (!err.message.includes('ERR_ABORTED')) {
+        throw err;
+      }
     }
 
-    const page = await ctx.newPage();
-    await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: timeoutMs });
-    await page.waitForTimeout(waitAfterLoadMs);
-
-    // Apollo-State aus dem DOM extrahieren
-    const apolloState = await page.evaluate(() => {
-      try {
-        return window.__ARTICLE_DETAIL_APOLLO_STATE__ || null;
-      } catch {
-        return null;
-      }
-    });
+    // Polling auf Apollo-State (da SSR, meist in < 500 ms da)
+    const apolloState = await waitForWindowProperty(page, '__ARTICLE_DETAIL_APOLLO_STATE__', 8000);
 
     const currentUrl = page.url();
-    await ctx.close();
 
     if (!apolloState) {
       throw new Error(
@@ -104,8 +63,6 @@ async function _fetchHornbachArticleInternal({
 
     return parseHornbachApolloState(apolloState, currentUrl);
   } finally {
-    if (ownBrowser) {
-      await browser.close();
-    }
+    await ctx.close();
   }
 }

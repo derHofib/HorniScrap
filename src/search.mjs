@@ -1,29 +1,11 @@
-import { chromium } from 'playwright';
 import { parseHornbachApolloState } from './parser.mjs';
-
-/**
- * @typedef {Object} SearchResultItem
- * @property {string} sku
- * @property {string} title
- * @property {string} url
- * @property {string|null} brand
- * @property {number} price
- * @property {string} currency
- * @property {string} unit
- * @property {string|null} imageUrl
- * @property {{ averageRating: number, reviewCount: number }|null} rating
- * @property {boolean} canReserveInStore
- * @property {string|null} storeStatusText
- * @property {boolean} canOrderOnline
- * @property {string|null} onlineStatusText
- * @property {Array<{ minAmount: number, price: number, unit: string }>} tierPrices
- */
+import { getBrowser, createOptimizedPage, waitForWindowProperty } from './browser-pool.mjs';
 
 /**
  * Parst die Suchergebnisse aus dem __APOLLO_STATE__ einer HORNBACH-Suchseite.
  *
  * @param {Record<string, any>} apolloState
- * @returns {SearchResultItem[]}
+ * @returns {Array<any>}
  */
 export function parseHornbachSearchResults(apolloState) {
   if (!apolloState || typeof apolloState !== 'object') {
@@ -93,22 +75,20 @@ export function parseHornbachSearchResults(apolloState) {
 }
 
 /**
- * Führt eine Volltextsuche auf HORNBACH aus und liefert eine Trefferliste zurück.
+ * Führt eine blitzschnelle Volltextsuche auf HORNBACH aus (mit Browser-Pooling).
  *
  * @param {Object} params
- * @param {string} params.searchTerm - Suchbegriff (z. B. "fi schalter", "nym-j", "wago")
- * @param {string} [params.storeId] - Optionale Filial-ID (z. B. "609")
+ * @param {string} params.searchTerm - Suchbegriff
+ * @param {string} [params.storeId]
  * @param {boolean} [params.headless=false]
- * @param {number} [params.timeoutMs=60000]
- * @param {number} [params.waitAfterLoadMs=8000]
+ * @param {number} [params.timeoutMs=30000]
  * @returns {Promise<{ isSingleProduct: boolean, count: number, results: any[] }>}
  */
 export async function searchHornbachArticles({
   searchTerm,
   storeId = null,
   headless = false,
-  timeoutMs = 60000,
-  waitAfterLoadMs = 8000,
+  timeoutMs = 30000,
 }) {
   const cleanTerm = searchTerm.trim();
   if (!cleanTerm) {
@@ -118,25 +98,11 @@ export async function searchHornbachArticles({
   const searchUrl = cleanTerm.match(/^\d+$/)
     ? `https://www.hornbach.de/s/${cleanTerm}`
     : `https://www.hornbach.de/s/${encodeURIComponent(cleanTerm)}/`;
-  const browser = await chromium.launch({ headless });
+
+  const browser = await getBrowser(headless);
+  const { ctx, page } = await createOptimizedPage(browser, storeId);
 
   try {
-    const ctx = await browser.newContext({
-      locale: 'de-DE',
-      timezoneId: 'Europe/Berlin',
-      viewport: { width: 1440, height: 900 },
-    });
-
-    if (storeId) {
-      const cleanStoreId = String(storeId).trim();
-      await ctx.addCookies([
-        { name: 'hbMarketCookie', value: cleanStoreId, domain: 'www.hornbach.de', path: '/' },
-        { name: 'hbMarketSession', value: cleanStoreId, domain: 'www.hornbach.de', path: '/' },
-        { name: 'hbMarketConfirmed', value: 'true', domain: 'www.hornbach.de', path: '/' },
-      ]);
-    }
-
-    const page = await ctx.newPage();
     try {
       await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: timeoutMs });
     } catch (navErr) {
@@ -144,40 +110,52 @@ export async function searchHornbachArticles({
         throw navErr;
       }
     }
-    await page.waitForTimeout(waitAfterLoadMs);
 
-    // Prüfen, ob direkt auf ein Einzelprodukt weitergeleitet wurde
-    const currentUrl = page.url();
-    const isProductPage = currentUrl.includes('/p/');
+    // Warte auf entweder Einzelprodukt oder Suchliste (max 6s)
+    let isProduct = false;
+    let state = null;
 
-    if (isProductPage) {
-      const detailApollo = await page.evaluate(() => window.__ARTICLE_DETAIL_APOLLO_STATE__ || null);
-      await ctx.close();
-      if (detailApollo) {
-        const product = parseHornbachApolloState(detailApollo, currentUrl);
-        return {
-          isSingleProduct: true,
-          count: 1,
-          results: [product],
-        };
+    const t0 = Date.now();
+    while (Date.now() - t0 < 8000) {
+      const url = page.url();
+      if (url.includes('/p/')) {
+        state = await page.evaluate(() => window.__ARTICLE_DETAIL_APOLLO_STATE__ || null);
+        if (state) {
+          isProduct = true;
+          break;
+        }
+      } else {
+        state = await page.evaluate(() => window.__APOLLO_STATE__ || null);
+        if (state) {
+          isProduct = false;
+          break;
+        }
       }
+      await page.waitForTimeout(150);
     }
 
-    // Suchergebnisseite auslesen
-    const searchApollo = await page.evaluate(() => window.__APOLLO_STATE__ || null);
-    await ctx.close();
+    const currentUrl = page.url();
 
-    if (!searchApollo) {
-      throw new Error(`Suchergebnisse konnten nicht geladen werden (URL: ${currentUrl})`);
+    if (isProduct && state) {
+      const product = parseHornbachApolloState(state, currentUrl);
+      return {
+        isSingleProduct: true,
+        count: 1,
+        results: [product],
+      };
     }
 
-    const results = parseHornbachSearchResults(searchApollo);
+    if (!state) {
+      throw new Error(`Weder Produkt noch Suchergebnisse geladen (URL: ${currentUrl})`);
+    }
+
+    const results = parseHornbachSearchResults(state);
     return {
       isSingleProduct: false,
       count: results.length,
       results,
     };
   } finally {
-    await browser.close();
+    await ctx.close();
   }
 }
