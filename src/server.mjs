@@ -1,10 +1,11 @@
 import http from 'node:http';
 import { URL } from 'node:url';
 import { fetchHornbachArticle } from './fetcher.mjs';
+import { searchHornbachArticles } from './search.mjs';
 
 const PORT = process.env.PORT || 8050;
 
-// Einfacher In-Memory-Cache (TTL: 15 Minuten), um Hornbach nicht unnötig zu belasten
+// In-Memory-Cache (TTL: 15 Minuten)
 const cache = new Map();
 const CACHE_TTL_MS = 15 * 60 * 1000;
 
@@ -22,27 +23,28 @@ function setCache(key, data) {
   cache.set(key, { timestamp: Date.now(), data });
 }
 
-// Integrierte HTML-Oberfläche (Modern, Responsive, im Stil von FieldVibe)
+// Integrierte HTML-Oberfläche mit Suchleiste & Treffer-Raster
 const HTML_CONTENT = `<!DOCTYPE html>
 <html lang="de">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>HorniScrap — FieldVibe Material-Checker</title>
+  <title>HorniScrap — HORNBACH Suche & Material-Checker</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <style>
     :root {
-      --bg: #0f172a;
+      --bg: #0b1120;
       --card-bg: #1e293b;
       --card-border: #334155;
       --text: #f8fafc;
       --text-muted: #94a3b8;
-      --accent: #f97316; /* Hornbach Orange */
+      --accent: #f97316;
       --accent-hover: #ea580c;
       --success: #10b981;
       --danger: #ef4444;
+      --warning: #f59e0b;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -57,7 +59,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
     }
     .container {
       width: 100%;
-      max-width: 800px;
+      max-width: 1080px;
     }
     header {
       margin-bottom: 2rem;
@@ -71,115 +73,106 @@ const HTML_CONTENT = `<!DOCTYPE html>
       border: 1px solid rgba(249, 115, 22, 0.3);
       border-radius: 9999px;
       font-size: 0.8rem;
-      font-weight: 600;
+      font-weight: 700;
       letter-spacing: 0.05em;
       text-transform: uppercase;
       margin-bottom: 0.75rem;
     }
     h1 {
-      font-size: 2rem;
-      font-weight: 700;
+      font-size: 2.25rem;
+      font-weight: 800;
       color: #fff;
-      letter-spacing: -0.02em;
+      letter-spacing: -0.03em;
       margin-bottom: 0.5rem;
     }
     p.subtitle {
       color: var(--text-muted);
-      font-size: 0.95rem;
+      font-size: 1rem;
     }
+
+    /* Suchleiste */
     .search-card {
       background: var(--card-bg);
       border: 1px solid var(--card-border);
-      border-radius: 12px;
+      border-radius: 14px;
       padding: 1.5rem;
-      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3);
+      box-shadow: 0 10px 30px -5px rgba(0, 0, 0, 0.4);
       margin-bottom: 2rem;
-    }
-    .form-group {
-      margin-bottom: 1.25rem;
-    }
-    label {
-      display: block;
-      font-size: 0.85rem;
-      font-weight: 600;
-      margin-bottom: 0.5rem;
-      color: #cbd5e1;
     }
     .input-row {
       display: grid;
-      grid-template-columns: 1fr 220px;
-      gap: 1rem;
+      grid-template-columns: 1fr 240px auto;
+      gap: 0.75rem;
+      align-items: center;
     }
-    @media (max-width: 640px) {
+    @media (max-width: 768px) {
       .input-row { grid-template-columns: 1fr; }
+    }
+    .search-input-wrap {
+      position: relative;
     }
     input, select {
       width: 100%;
-      padding: 0.75rem 1rem;
-      background: #0f172a;
+      padding: 0.85rem 1rem;
+      background: #0b1120;
       border: 1px solid var(--card-border);
       border-radius: 8px;
       color: #fff;
       font-family: inherit;
       font-size: 0.95rem;
       outline: none;
-      transition: border-color 0.2s;
+      transition: border-color 0.2s, box-shadow 0.2s;
     }
     input:focus, select:focus {
       border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(249, 115, 22, 0.15);
     }
     .examples {
       display: flex;
       gap: 0.5rem;
+      flex-wrap: wrap;
       align-items: center;
-      margin-top: 0.5rem;
+      margin-top: 0.75rem;
       font-size: 0.8rem;
       color: var(--text-muted);
     }
     .chip {
       background: #334155;
-      padding: 0.2rem 0.6rem;
+      padding: 0.25rem 0.65rem;
       border-radius: 4px;
       cursor: pointer;
       color: #cbd5e1;
       border: none;
-      transition: background 0.15s;
+      transition: background 0.15s, color 0.15s;
     }
     .chip:hover {
       background: var(--accent);
       color: #fff;
     }
     button.submit-btn {
-      width: 100%;
-      padding: 0.85rem;
+      padding: 0.85rem 1.5rem;
       background: var(--accent);
       color: #fff;
       border: none;
       border-radius: 8px;
       font-size: 1rem;
-      font-weight: 600;
+      font-weight: 700;
       cursor: pointer;
       display: flex;
       align-items: center;
       justify-content: center;
       gap: 0.5rem;
+      white-space: nowrap;
       transition: background 0.2s, transform 0.1s;
     }
-    button.submit-btn:hover {
-      background: var(--accent-hover);
-    }
-    button.submit-btn:active {
-      transform: scale(0.99);
-    }
-    button.submit-btn:disabled {
-      opacity: 0.6;
-      cursor: not-allowed;
-    }
-    /* Loading Spinner */
+    button.submit-btn:hover { background: var(--accent-hover); }
+    button.submit-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+
+    /* Spinner */
     .spinner {
       display: none;
-      width: 20px;
-      height: 20px;
+      width: 18px;
+      height: 18px;
       border: 3px solid rgba(255,255,255,0.3);
       border-radius: 50%;
       border-top-color: #fff;
@@ -187,184 +180,203 @@ const HTML_CONTENT = `<!DOCTYPE html>
     }
     @keyframes spin { to { transform: rotate(360deg); } }
 
-    /* Result Card */
-    .result-card {
+    /* Results Header */
+    .results-header {
       display: none;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 1rem;
+      padding: 0 0.5rem;
+    }
+    .results-count {
+      font-size: 0.95rem;
+      font-weight: 600;
+      color: var(--text-muted);
+    }
+
+    /* Grid of Product Cards */
+    .results-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+      gap: 1.25rem;
+      margin-bottom: 2rem;
+    }
+    .product-card {
       background: var(--card-bg);
       border: 1px solid var(--card-border);
       border-radius: 12px;
-      overflow: hidden;
-      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3);
+      padding: 1.25rem;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      transition: transform 0.15s, border-color 0.15s;
     }
-    .product-header {
-      padding: 1.5rem;
-      display: grid;
-      grid-template-columns: 140px 1fr;
-      gap: 1.5rem;
-      border-bottom: 1px solid var(--card-border);
-      background: rgba(255,255,255,0.02);
+    .product-card:hover {
+      border-color: #475569;
+      transform: translateY(-2px);
     }
-    @media (max-width: 550px) {
-      .product-header { grid-template-columns: 1fr; }
+    .card-top {
+      display: flex;
+      gap: 1rem;
+      margin-bottom: 1rem;
     }
-    .product-img {
-      width: 100%;
-      height: 140px;
+    .card-thumb {
+      width: 80px;
+      height: 80px;
       object-fit: contain;
       background: #fff;
       border-radius: 8px;
-      padding: 0.5rem;
+      padding: 0.4rem;
+      flex-shrink: 0;
     }
-    .product-details {
+    .card-meta {
+      flex: 1;
+      min-width: 0;
+    }
+    .card-brand {
+      color: var(--accent);
+      font-size: 0.75rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .card-title {
+      font-size: 0.95rem;
+      font-weight: 700;
+      color: #fff;
+      line-height: 1.35;
+      margin: 0.2rem 0 0.4rem 0;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+    .card-sku {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.75rem;
+      color: var(--text-muted);
+    }
+    .card-rating {
+      font-size: 0.8rem;
+      color: #fbbf24;
+      margin-top: 0.2rem;
+    }
+    .card-bottom {
+      border-top: 1px solid var(--card-border);
+      padding-top: 1rem;
       display: flex;
       flex-direction: column;
-      justify-content: center;
+      gap: 0.75rem;
     }
-    .product-brand {
-      color: var(--accent);
-      font-size: 0.8rem;
-      font-weight: 700;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-    }
-    .product-title {
-      font-size: 1.25rem;
-      font-weight: 700;
-      color: #fff;
-      margin: 0.25rem 0 0.75rem 0;
-      line-height: 1.3;
-    }
-    .meta-tags {
+    .card-price-row {
       display: flex;
-      flex-wrap: wrap;
-      gap: 0.5rem;
+      justify-content: space-between;
+      align-items: baseline;
     }
-    .meta-tag {
-      font-size: 0.75rem;
-      font-family: 'JetBrains Mono', monospace;
-      padding: 0.2rem 0.5rem;
-      background: #0f172a;
-      border: 1px solid var(--card-border);
-      border-radius: 4px;
-      color: #94a3b8;
-    }
-
-    /* Grid for Inventory & Price */
-    .product-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      border-bottom: 1px solid var(--card-border);
-    }
-    @media (max-width: 640px) {
-      .product-grid { grid-template-columns: 1fr; }
-    }
-    .grid-col {
-      padding: 1.5rem;
-    }
-    .grid-col:first-child {
-      border-right: 1px solid var(--card-border);
-    }
-    @media (max-width: 640px) {
-      .grid-col:first-child { border-right: none; border-bottom: 1px solid var(--card-border); }
-    }
-    .section-title {
-      font-size: 0.75rem;
-      font-weight: 700;
-      color: var(--text-muted);
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-      margin-bottom: 1rem;
-    }
-    .price-tag {
-      font-size: 2rem;
+    .card-price {
+      font-size: 1.4rem;
       font-weight: 800;
       color: #fff;
-      letter-spacing: -0.02em;
     }
-    .price-unit {
-      font-size: 1rem;
+    .card-unit {
+      font-size: 0.85rem;
       color: var(--text-muted);
       font-weight: 500;
     }
-    .tier-prices {
-      margin-top: 0.75rem;
-      font-size: 0.85rem;
-      color: #cbd5e1;
+    .badges-row {
+      display: flex;
+      gap: 0.4rem;
+      flex-wrap: wrap;
     }
-    .tier-badge {
-      display: inline-block;
+    .status-badge {
+      font-size: 0.75rem;
+      font-weight: 600;
       padding: 0.2rem 0.5rem;
+      border-radius: 4px;
+    }
+    .badge-online {
       background: rgba(16, 185, 129, 0.15);
       border: 1px solid rgba(16, 185, 129, 0.3);
       color: var(--success);
-      border-radius: 4px;
-      font-weight: 600;
-      margin-top: 0.25rem;
     }
-
-    /* Store Info Box */
-    .store-box {
-      background: #0f172a;
-      border: 1px solid var(--card-border);
-      border-radius: 8px;
-      padding: 1rem;
+    .badge-store {
+      background: rgba(59, 130, 246, 0.15);
+      border: 1px solid rgba(59, 130, 246, 0.3);
+      color: #60a5fa;
     }
-    .store-header {
-      font-size: 0.95rem;
-      font-weight: 700;
+    .check-btn {
+      width: 100%;
+      padding: 0.6rem;
+      background: #334155;
       color: #fff;
-      margin-bottom: 0.5rem;
-    }
-    .store-stock {
+      border: none;
+      border-radius: 6px;
+      font-weight: 600;
+      font-size: 0.85rem;
+      cursor: pointer;
       display: flex;
       align-items: center;
-      gap: 0.5rem;
-      font-size: 0.95rem;
-      font-weight: 600;
-      color: var(--success);
-      margin-bottom: 0.5rem;
+      justify-content: center;
+      gap: 0.4rem;
+      transition: background 0.15s;
     }
-    .aisle-badge {
+    .check-btn:hover {
+      background: var(--accent);
+    }
+
+    /* Detail Modal / Overlay */
+    .detail-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.75);
+      backdrop-filter: blur(4px);
+      z-index: 50;
+      align-items: center;
+      justify-content: center;
+      padding: 1rem;
+    }
+    .detail-card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 14px;
+      width: 100%;
+      max-width: 680px;
+      max-height: 90vh;
+      overflow-y: auto;
+      box-shadow: 0 20px 40px rgba(0,0,0,0.6);
+      position: relative;
+    }
+    .close-modal {
+      position: absolute;
+      top: 1rem;
+      right: 1rem;
+      background: #334155;
+      color: #fff;
+      border: none;
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      font-size: 1.2rem;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 10;
+    }
+    .close-modal:hover { background: var(--danger); }
+    .aisle-highlight {
       display: inline-flex;
       align-items: center;
-      gap: 0.4rem;
-      padding: 0.35rem 0.75rem;
+      gap: 0.5rem;
+      padding: 0.5rem 1rem;
       background: rgba(249, 115, 22, 0.15);
       border: 1px solid rgba(249, 115, 22, 0.4);
       color: var(--accent);
-      border-radius: 6px;
-      font-weight: 700;
-      font-size: 0.9rem;
+      border-radius: 8px;
+      font-weight: 800;
+      font-size: 1.1rem;
       margin-top: 0.5rem;
-    }
-    .delivery-info {
-      margin-top: 0.5rem;
-      font-size: 0.85rem;
-      color: var(--text-muted);
-    }
-
-    /* Raw JSON details */
-    details {
-      padding: 1rem 1.5rem;
-      font-size: 0.85rem;
-      color: var(--text-muted);
-      cursor: pointer;
-    }
-    summary {
-      font-weight: 600;
-      outline: none;
-    }
-    pre {
-      margin-top: 0.75rem;
-      background: #0f172a;
-      border: 1px solid var(--card-border);
-      border-radius: 6px;
-      padding: 1rem;
-      color: #38bdf8;
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 0.8rem;
-      overflow-x: auto;
-      max-height: 250px;
     }
     .error-box {
       display: none;
@@ -381,175 +393,242 @@ const HTML_CONTENT = `<!DOCTYPE html>
 <body>
   <div class="container">
     <header>
-      <span class="badge">FieldVibe Integration Prototype</span>
-      <h1>HorniScrap Material-Checker</h1>
-      <p class="subtitle">Echtzeit-Verfügbarkeit, Preise & Regalstandorte von HORNBACH abfragen</p>
+      <span class="badge">FieldVibe Integration</span>
+      <h1>HORNBACH Material-Suche</h1>
+      <p class="subtitle">Durchsuche das HORNBACH-Sortiment live nach Preisen, Filialbeständen & Regalplätzen</p>
     </header>
 
     <div class="search-card">
-      <form id="checkForm">
-        <div class="form-group">
-          <div class="input-row">
-            <div>
-              <label for="query">Artikelnummer (SKU) oder HORNBACH-URL</label>
-              <input type="text" id="query" placeholder="z. B. 6072187 oder Hornbach-Link" required>
-            </div>
-            <div>
-              <label for="storeId">HORNBACH Filiale</label>
-              <select id="storeId">
-                <option value="609" selected>609 — Berlin-Mariendorf</option>
-                <option value="616">616 — Berlin-Neukölln</option>
-                <option value="608">608 — Velten</option>
-                <option value="617">617 — Berlin-Bohnsdorf</option>
-                <option value="611">611 — Potsdam-Marquardt</option>
-                <option value="710">710 — München-Fröttmaning</option>
-                <option value="510">510 — Frankfurt-Niedereschbach</option>
-              </select>
-            </div>
+      <form id="searchForm">
+        <div class="input-row">
+          <div class="search-input-wrap">
+            <input type="text" id="searchInput" placeholder="z. B. FI Schalter 16A, NYM-J 5x2.5, WAGO Klemmen..." required autofocus>
           </div>
-          <div class="examples">
-            <span>Schnell-Beispiele:</span>
-            <button type="button" class="chip" onclick="fillExample('6072187', '609')">FI-Schalter 16A (Mariendorf)</button>
-            <button type="button" class="chip" onclick="fillExample('6072187', '616')">FI-Schalter 16A (Neukölln)</button>
-            <button type="button" class="chip" onclick="fillExample('5101035', '609')">Kabel NYM-J 5x2,5</button>
+          <div>
+            <select id="storeSelect">
+              <option value="609" selected>609 — Berlin-Mariendorf</option>
+              <option value="616">616 — Berlin-Neukölln</option>
+              <option value="608">608 — Velten</option>
+              <option value="617">617 — Berlin-Bohnsdorf</option>
+              <option value="611">611 — Potsdam-Marquardt</option>
+              <option value="710">710 — München-Fröttmaning</option>
+              <option value="510">510 — Frankfurt-Niedereschbach</option>
+            </select>
+          </div>
+          <div>
+            <button type="submit" class="submit-btn" id="submitBtn">
+              <span class="spinner" id="spinner"></span>
+              <span id="btnText">Suchen</span>
+            </button>
           </div>
         </div>
-
-        <button type="submit" class="submit-btn" id="submitBtn">
-          <span class="spinner" id="spinner"></span>
-          <span id="btnText">Verfügbarkeit & Preis prüfen</span>
-        </button>
+        <div class="examples">
+          <span>Häufige Handwerker-Suchen:</span>
+          <button type="button" class="chip" onclick="triggerSearch('FI Schalter 16A')">FI Schalter 16A</button>
+          <button type="button" class="chip" onclick="triggerSearch('NYM-J 5x2.5')">NYM-J 5x2,5</button>
+          <button type="button" class="chip" onclick="triggerSearch('WAGO Klemmen')">WAGO Klemmen</button>
+          <button type="button" class="chip" onclick="triggerSearch('Schuko Steckdose weiß')">Schuko Steckdosen</button>
+          <button type="button" class="chip" onclick="triggerSearch('6072187')">Art.-Nr. 6072187</button>
+        </div>
       </form>
     </div>
 
     <div class="error-box" id="errorBox"></div>
 
-    <div class="result-card" id="resultCard">
-      <div class="product-header">
-        <img src="" alt="" class="product-img" id="productImg">
-        <div class="product-details">
-          <div class="product-brand" id="productBrand">Hager</div>
-          <h2 class="product-title" id="productTitle">Produktname</h2>
-          <div class="meta-tags">
-            <span class="meta-tag" id="metaSku">SKU: -</span>
-            <span class="meta-tag" id="metaEan">EAN: -</span>
-            <span class="meta-tag" id="metaOnline">Online: -</span>
-          </div>
+    <div class="results-header" id="resultsHeader">
+      <div class="results-count" id="resultsCount">0 Treffer gefunden</div>
+      <div style="font-size: 0.85rem; color: var(--text-muted);">Preise & Bestände für gewählten Markt</div>
+    </div>
+
+    <div class="results-grid" id="resultsGrid"></div>
+  </div>
+
+  <!-- Detail Modal -->
+  <div class="detail-overlay" id="detailOverlay" onclick="if(event.target===this)closeDetail()">
+    <div class="detail-card">
+      <button class="close-modal" onclick="closeDetail()">&times;</button>
+      <div style="padding: 1.5rem; border-bottom: 1px solid var(--card-border); display: flex; gap: 1rem;">
+        <img id="detailImg" src="" style="width: 100px; height: 100px; object-fit: contain; background: #fff; border-radius: 8px; padding: 0.3rem;">
+        <div>
+          <div id="detailBrand" style="color: var(--accent); font-size: 0.8rem; font-weight: 700; text-transform: uppercase;">MARKE</div>
+          <h2 id="detailTitle" style="font-size: 1.15rem; font-weight: 700; margin: 0.2rem 0 0.5rem 0;">Titel</h2>
+          <div style="font-family: 'JetBrains Mono', monospace; font-size: 0.8rem; color: var(--text-muted);" id="detailSku">SKU: </div>
         </div>
       </div>
-
-      <div class="product-grid">
-        <div class="grid-col">
-          <div class="section-title">Einkaufspreis</div>
-          <div class="price-tag">
-            <span id="priceValue">0.00</span> €
-            <span class="price-unit" id="priceUnit">/ ST</span>
-          </div>
-          <div class="tier-prices" id="tierPriceContainer"></div>
+      <div style="padding: 1.5rem; display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+        <div>
+          <div style="font-size: 0.75rem; color: var(--text-muted); font-weight: 700; text-transform: uppercase;">Einkaufspreis</div>
+          <div style="font-size: 1.8rem; font-weight: 800; color: #fff; margin-top: 0.25rem;"><span id="detailPrice">0.00</span> € <span style="font-size: 0.9rem; color: var(--text-muted);" id="detailUnit">/ ST</span></div>
+          <div id="detailTier" style="margin-top: 0.5rem;"></div>
         </div>
-
-        <div class="grid-col">
-          <div class="section-title">Vor-Ort-Bestand & Regalplatz</div>
-          <div class="store-box" id="storeBox">
-            <div class="store-header" id="storeName">Markt</div>
-            <div class="store-stock" id="storeStock">🟢 Bestand wird ermittelt...</div>
-            <div class="aisle-badge" id="aisleBadge">📍 Gang 20</div>
-            <div class="delivery-info" id="deliveryInfo">Abholzeit</div>
-          </div>
+        <div>
+          <div style="font-size: 0.75rem; color: var(--text-muted); font-weight: 700; text-transform: uppercase;">Vor Ort im Markt</div>
+          <div style="font-size: 1rem; font-weight: 700; color: #fff; margin-top: 0.25rem;" id="detailStoreName">Markt</div>
+          <div id="detailStock" style="font-weight: 700; margin-top: 0.25rem;">Bestand...</div>
+          <div class="aisle-highlight" id="detailAisle">📍 Gang 20</div>
+          <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.4rem;" id="detailPickup"></div>
         </div>
       </div>
-
-      <details>
-        <summary>Rohdaten ansehen (JSON für FieldVibe REST-API)</summary>
-        <pre><code id="jsonOutput">{}</code></pre>
-      </details>
+      <div style="padding: 1rem 1.5rem; background: #0f172a; border-top: 1px solid var(--card-border);">
+        <button style="width: 100%; padding: 0.75rem; background: var(--accent); color: #fff; border: none; border-radius: 6px; font-weight: 700; cursor: pointer;" onclick="alert('In FieldVibe als Materialbedarf übernommen!')">
+          + In FieldVibe-Vorgang übernehmen
+        </button>
+      </div>
     </div>
   </div>
 
   <script>
-    function fillExample(sku, store) {
-      document.getElementById('query').value = sku;
-      if (store) document.getElementById('storeId').value = store;
-      document.getElementById('checkForm').dispatchEvent(new Event('submit'));
-    }
-
-    const form = document.getElementById('checkForm');
+    const form = document.getElementById('searchForm');
+    const searchInput = document.getElementById('searchInput');
+    const storeSelect = document.getElementById('storeSelect');
     const submitBtn = document.getElementById('submitBtn');
     const spinner = document.getElementById('spinner');
     const btnText = document.getElementById('btnText');
-    const resultCard = document.getElementById('resultCard');
+    const resultsGrid = document.getElementById('resultsGrid');
+    const resultsHeader = document.getElementById('resultsHeader');
+    const resultsCount = document.getElementById('resultsCount');
     const errorBox = document.getElementById('errorBox');
+
+    function triggerSearch(term) {
+      searchInput.value = term;
+      form.dispatchEvent(new Event('submit'));
+    }
 
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
-      const query = document.getElementById('query').value.trim();
-      const storeId = document.getElementById('storeId').value;
-
+      const query = searchInput.value.trim();
+      const storeId = storeSelect.value;
       if (!query) return;
 
       submitBtn.disabled = true;
       spinner.style.display = 'inline-block';
-      btnText.textContent = 'HORNBACH wird abgefragt (~10s)...';
+      btnText.textContent = 'Suche läuft...';
       errorBox.style.display = 'none';
-      resultCard.style.display = 'none';
+      resultsGrid.innerHTML = '';
+      resultsHeader.style.display = 'none';
 
       try {
-        const res = await fetch(\`/api/article?query=\${encodeURIComponent(query)}&storeId=\${encodeURIComponent(storeId)}\`);
+        const res = await fetch(\`/api/search?q=\${encodeURIComponent(query)}&storeId=\${encodeURIComponent(storeId)}\`);
         const data = await res.json();
 
-        if (!res.ok || data.error) {
-          throw new Error(data.error || 'Fehler beim Abruf');
-        }
+        if (!res.ok || data.error) throw new Error(data.error || 'Fehler bei der Suche');
 
-        renderArticle(data);
+        if (data.isSingleProduct && data.results.length === 1) {
+          // Direkt Einzelprodukt anzeigen
+          renderCards(data.results, true);
+          openDetail(data.results[0]);
+        } else {
+          renderCards(data.results, false);
+        }
       } catch (err) {
         errorBox.textContent = '❌ ' + err.message;
         errorBox.style.display = 'block';
       } finally {
         submitBtn.disabled = false;
         spinner.style.display = 'none';
-        btnText.textContent = 'Verfügbarkeit & Preis prüfen';
+        btnText.textContent = 'Suchen';
       }
     });
 
-    function renderArticle(a) {
-      document.getElementById('productImg').src = a.imageUrl || 'https://via.placeholder.com/140';
-      document.getElementById('productBrand').textContent = a.brand || 'HORNBACH';
-      document.getElementById('productTitle').textContent = a.title;
-      document.getElementById('metaSku').textContent = 'SKU: ' + a.sku;
-      document.getElementById('metaEan').textContent = 'EAN: ' + (a.ean || 'k.A.');
-      document.getElementById('metaOnline').textContent = a.online.canOrder ? 'Online: Lieferbar (' + (a.online.deliveryTimeText || '') + ')' : 'Online: Nicht lieferbar';
+    function renderCards(items, isSingle) {
+      resultsGrid.innerHTML = '';
+      resultsHeader.style.display = 'flex';
+      resultsCount.textContent = \`\${items.length} Treffer bei HORNBACH\`;
 
-      document.getElementById('priceValue').textContent = a.price.toFixed(2);
-      document.getElementById('priceUnit').textContent = '/ ' + a.unit;
+      if (items.length === 0) {
+        resultsGrid.innerHTML = '<div style="color: var(--text-muted); padding: 2rem;">Keine passenden Artikel gefunden.</div>';
+        return;
+      }
 
-      const tierContainer = document.getElementById('tierPriceContainer');
-      tierContainer.innerHTML = '';
+      items.forEach(item => {
+        const card = document.createElement('div');
+        card.className = 'product-card';
+        card.innerHTML = \`
+          <div>
+            <div class="card-top">
+              <img src="\${item.imageUrl || 'https://via.placeholder.com/80'}" class="card-thumb" alt="">
+              <div class="card-meta">
+                <div class="card-brand">\${item.brand || 'HORNBACH'}</div>
+                <div class="card-title" title="\${item.title}">\${item.title}</div>
+                <div class="card-sku">Art.-Nr. \${item.sku}</div>
+                \${item.rating ? \`<div class="card-rating">★ \${item.rating.averageRating} (\${item.rating.reviewCount})</div>\` : ''}
+              </div>
+            </div>
+            <div class="badges-row">
+              \${item.canOrderOnline ? '<span class="status-badge badge-online">🟢 Online bestellbar</span>' : ''}
+              \${item.canReserveInStore ? '<span class="status-badge badge-store">🏢 Im Markt vorrätig</span>' : ''}
+            </div>
+          </div>
+          <div class="card-bottom">
+            <div class="card-price-row">
+              <div class="card-price">\${item.price.toFixed(2)} €</div>
+              <div class="card-unit">/ \${item.unit}</div>
+            </div>
+            <button class="check-btn" onclick='checkArticleDetail("\${item.sku}")'>
+              📍 Filialbestand & Gang prüfen
+            </button>
+          </div>
+        \`;
+        resultsGrid.appendChild(card);
+      });
+    }
+
+    async function checkArticleDetail(sku) {
+      const storeId = storeSelect.value;
+      submitBtn.disabled = true;
+      btnText.textContent = 'Prüfe Markt...';
+      try {
+        const res = await fetch(\`/api/article?query=\${encodeURIComponent(sku)}&storeId=\${encodeURIComponent(storeId)}\`);
+        const article = await res.json();
+        if (article.error) throw new Error(article.error);
+        openDetail(article);
+      } catch (err) {
+        alert('Fehler beim Laden des Filialbestands: ' + err.message);
+      } finally {
+        submitBtn.disabled = false;
+        btnText.textContent = 'Suchen';
+      }
+    }
+
+    function openDetail(a) {
+      document.getElementById('detailImg').src = a.imageUrl || 'https://via.placeholder.com/100';
+      document.getElementById('detailBrand').textContent = a.brand || 'HORNBACH';
+      document.getElementById('detailTitle').textContent = a.title;
+      document.getElementById('detailSku').textContent = 'Art.-Nr.: ' + a.sku + (a.ean ? ' • EAN: ' + a.ean : '');
+      document.getElementById('detailPrice').textContent = a.price.toFixed(2);
+      document.getElementById('detailUnit').textContent = '/ ' + a.unit;
+
+      const tierDiv = document.getElementById('detailTier');
+      tierDiv.innerHTML = '';
       if (a.tierPrices && a.tierPrices.length > 0) {
         const tp = a.tierPrices[0];
-        tierContainer.innerHTML = \`<div class="tier-badge">Mengenrabatt: ab \${tp.minAmount} \${tp.unit} nur \${tp.price.toFixed(2)} €</div>\`;
+        tierDiv.innerHTML = \`<span style="background: rgba(16, 185, 129, 0.15); color: var(--success); padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.8rem; font-weight: 700;">ab \${tp.minAmount} \${tp.unit} nur \${tp.price.toFixed(2)} €</span>\`;
       }
 
       if (a.store) {
-        document.getElementById('storeName').textContent = a.store.name || ('Markt ID ' + a.store.storeId);
-        document.getElementById('storeStock').textContent = a.store.inStock
+        document.getElementById('detailStoreName').textContent = a.store.name || ('Markt ' + a.store.storeId);
+        const stockEl = document.getElementById('detailStock');
+        stockEl.textContent = a.store.inStock
           ? ('🟢 ' + (a.store.stockCount !== null ? a.store.stockCount + ' Stück vorrätig' : 'Im Markt vorrätig'))
-          : '🔴 Nicht im Markt vorrätig';
-        document.getElementById('storeStock').style.color = a.store.inStock ? 'var(--success)' : 'var(--danger)';
+          : '🔴 Nicht vorrätig';
+        stockEl.style.color = a.store.inStock ? 'var(--success)' : 'var(--danger)';
 
-        const aisleBadge = document.getElementById('aisleBadge');
+        const aisleEl = document.getElementById('detailAisle');
         if (a.store.aisle) {
-          aisleBadge.textContent = '📍 ' + a.store.aisle;
-          aisleBadge.style.display = 'inline-flex';
+          aisleEl.textContent = '📍 ' + a.store.aisle;
+          aisleEl.style.display = 'inline-flex';
         } else {
-          aisleBadge.style.display = 'none';
+          aisleEl.style.display = 'none';
         }
 
-        document.getElementById('deliveryInfo').textContent = a.store.pickupTimeText || '';
+        document.getElementById('detailPickup').textContent = a.store.pickupTimeText || '';
       }
 
-      document.getElementById('jsonOutput').textContent = JSON.stringify(a, null, 2);
-      resultCard.style.display = 'block';
+      document.getElementById('detailOverlay').style.display = 'flex';
+    }
+
+    function closeDetail() {
+      document.getElementById('detailOverlay').style.display = 'none';
     }
   </script>
 </body>
@@ -560,7 +639,6 @@ const HTML_CONTENT = `<!DOCTYPE html>
 const server = http.createServer(async (req, res) => {
   const reqUrl = new URL(req.url, `http://${req.headers.host}`);
 
-  // CORS Header für Anfragen von FieldVibe (z. B. Vite Dev Server http://localhost:5173)
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -578,7 +656,45 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // 2. API-Endpunkt für FieldVibe
+  // 2. Volltextsuche: GET /api/search?q=<term>&storeId=<storeId>
+  if (reqUrl.pathname === '/api/search') {
+    const q = reqUrl.searchParams.get('q') || reqUrl.searchParams.get('query');
+    const storeId = reqUrl.searchParams.get('storeId') || null;
+
+    if (!q) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Suchbegriff (q) erforderlich' }));
+      return;
+    }
+
+    const cacheKey = `search:${q.trim().toLowerCase()}:${storeId || 'default'}`;
+    const cached = getCached(cacheKey);
+    if (cached) {
+      res.writeHead(200, { 'Content-Type': 'application/json', 'X-Cache': 'HIT' });
+      res.end(JSON.stringify(cached));
+      return;
+    }
+
+    try {
+      console.log(`[API Search] Suche HORNBACH nach: "${q}" (Markt: ${storeId || 'Default'})...`);
+      const results = await searchHornbachArticles({
+        searchTerm: q,
+        storeId,
+      });
+
+      setCache(cacheKey, results);
+
+      res.writeHead(200, { 'Content-Type': 'application/json', 'X-Cache': 'MISS' });
+      res.end(JSON.stringify(results));
+    } catch (err) {
+      console.error(`[API Search] Fehler bei Suche nach "${q}":`, err.message);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message }));
+    }
+    return;
+  }
+
+  // 3. Einzelartikel-Abfrage: GET /api/article?query=<skuOrUrl>&storeId=<storeId>
   if (reqUrl.pathname === '/api/article') {
     const query = reqUrl.searchParams.get('query') || reqUrl.searchParams.get('sku');
     const storeId = reqUrl.searchParams.get('storeId') || null;
@@ -589,7 +705,7 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    const cacheKey = `${query.trim()}:${storeId || 'default'}`;
+    const cacheKey = `article:${query.trim()}:${storeId || 'default'}`;
     const cached = getCached(cacheKey);
     if (cached) {
       res.writeHead(200, { 'Content-Type': 'application/json', 'X-Cache': 'HIT' });
@@ -598,7 +714,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     try {
-      console.log(`[API] Frage HORNBACH ab: "${query}" (Markt: ${storeId || 'Default'})...`);
+      console.log(`[API Article] Frage HORNBACH ab: "${query}" (Markt: ${storeId || 'Default'})...`);
       const result = await fetchHornbachArticle({
         urlOrSku: query,
         storeId,
@@ -609,14 +725,14 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(200, { 'Content-Type': 'application/json', 'X-Cache': 'MISS' });
       res.end(JSON.stringify(result));
     } catch (err) {
-      console.error(`[API] Fehler beim Abruf von "${query}":`, err.message);
+      console.error(`[API Article] Fehler beim Abruf von "${query}":`, err.message);
       res.writeHead(500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: err.message }));
     }
     return;
   }
 
-  // 3. Web-UI
+  // 4. Web-UI
   if (reqUrl.pathname === '/') {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     res.end(HTML_CONTENT);
@@ -629,8 +745,9 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, () => {
   console.log(`
-🚀 HorniScrap Server läuft!
-👉 Test-Oberfläche im Browser: http://localhost:${PORT}
-📡 API-Endpunkt für FieldVibe: http://localhost:${PORT}/api/article?sku=<SKU>&storeId=<STORE>
+🚀 HorniScrap Server läuft mit Suchfunktion!
+👉 Such-Oberfläche im Browser: http://localhost:${PORT}
+📡 API-Suche: http://localhost:${PORT}/api/search?q=<BEGRIFF>&storeId=<STORE>
+📡 API-Artikel: http://localhost:${PORT}/api/article?sku=<SKU>&storeId=<STORE>
 `);
 });
