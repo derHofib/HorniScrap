@@ -8,6 +8,7 @@
     "horniscrap": "src/cli.mjs"
   },
   "scripts": {
+    "start": "node src/server.mjs",
     "test": "node tests/test-parser.mjs",
     "cli": "node src/cli.mjs",
     "market-check": "node tools/machbarkeitstest/market-check.mjs"
